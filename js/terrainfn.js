@@ -219,15 +219,17 @@ export function surfaceInto(x, z, ny, out) {
   out[0] = dirt; out[1] = grass; out[2] = forest; out[3] = rk;
   return out;
 }
-// rolling resistance (m/s²) and grip multiplier from surface weights
-// Real-world numbers for 2.4" knobbly DH tyres:
-//  roll  = Crr·g (m/s²): hardpack ≈ .025, dry grass ≈ .065, forest loam/roots ≈ .055, rock slab ≈ .02
-//  grip  = tyre friction μ: hardpack ≈ .95, grass ≈ .72 (slides early), loam ≈ .8, dry rock ≈ 1.0
+// rolling resistance (m/s²) and grip multiplier from surface weights, for 2.4–2.5" knobbly DH tyres.
+//  roll  = Crr·g (m/s²): hardpack ≈ .03 (DH casings roll ~10 % worse than trail tyres), grass ≈ .045, forest loam ≈ .055,
+//          rock slab ≈ .02. Coast-down tests on dirt trails measure 0.04–0.05 g all-in (Beck 2004); mixed off-road ≈ .022–.03.
+//  grip  = tyre friction μ: hardpack ≈ .85, dry grass ≈ .55 (slides early), loam ≈ .70, dry rock ≈ .95. No bike-tyre-on-dirt
+//          μ is published; proxies: car tyre on loose moist dirt 0.6–0.65, dirt road 0.35, lab MTB tyre on sandpaper ~1.3.
 //  rough = how chattery the ground is (suspension losses, camera buzz): roots and rock gardens most
+//  (WOOD_FEEL, the riding feel on woodwork, is unchanged by this pass.)
 export function rideFeel(w) {
   return {
-    roll: (w[0] * .025 + w[1] * .065 + w[2] * .055 + w[3] * .02) * 9.81,
-    grip: w[0] * .95 + w[1] * .72 + w[2] * .8 + w[3] * 1.0,
+    roll: (w[0] * .03 + w[1] * .045 + w[2] * .055 + w[3] * .02) * 9.81,
+    grip: w[0] * .85 + w[1] * .55 + w[2] * .70 + w[3] * .95,
     rough: w[0] * .12 + w[1] * .3 + w[2] * .6 + w[3] * .75,
   };
 }

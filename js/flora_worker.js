@@ -21,9 +21,9 @@ SETS.highland=['spruceA','spruceB','fir','pine','snag'];   // Hollowfell: tall, 
 const TRUNK={spruceA:.3,spruceB:.34,fir:.23,pine:.25,snag:.27,aspenA:.17,aspenB:.17,
  larch:.27,larchB:.25,krumm:.16,stuntFir:.16,whitebark:.3,snagAlp:.25,cedar:1.38,doug:1.15,hemlock:.74,snagRain:.9,juniper:.22,pinyon:.24,juniperDead:.2};
 // "Less trees" (the author, 2026-10-06): every forest is thinned to KEEP of its old density and broken by open glades
-// ~80 m across (20 % of the trees left inside them), and trees stand ≥ 2.5 m further back from every riding line. The
+// ~80 m across (20 % of the trees left inside them), and trees stand ≥ 1.5 m further back from every riding line (none within ~6 m of a race line). The
 // trees that remain are a subset of the old ones, at the same spots, so each mountain's forest keeps its character.
-const KEEP={ridgeline:.85,freefall:.7,widowmaker:.95,shoreline:1,rampage:1,razorback:.9,hollowfell:.9},TREE_LINE_CLR=2.5;
+const KEEP={ridgeline:.85,freefall:.7,widowmaker:.95,shoreline:1,rampage:1,razorback:.9,hollowfell:.9},TREE_LINE_CLR=1.5;
 export const PROP_KEYS=['rockA','rockB','rockC','log','logOld','stump','logMoss','stumpMoss'];
 export const GROUND_KEYS=['grass','meadow','flowersA','flowersB','fern','bush','sapFir','sapSpruce','pebble'];
 export const KIND=['tree','rock','log'];
@@ -90,7 +90,7 @@ export function genTile(i,j){
    if(y===null)y=heightAt(x,z);const t=.85+u4*.3;const moss=M==='shoreline',sand=M==='desert';
    props.push(x,y-sc*.22,z,(u5-.5)*.3,u3*6.283,(u6-.5)*.3,sc,Math.floor(u3*2.999),moss?t*.8:sand?t*(1.3+u5*.15):t,moss?t*.92:sand?t*(.78+u6*.1):t*(.97+u5*.05),moss?t*.72:sand?t*.58:t*(.93+u6*.06),0);
    col.push(x,z,sc*1.05,1);
-   for(let k=0;k<(ALP||HL?1:M==='widowmaker'||M==='desert'?2:2);k++){const v1=r(),v2=r(),v3=r();if(v1<.45)continue;const a2=v2*6.283,dd=sc*(1.4+v3*.8),xx=x+Math.cos(a2)*dd,zz=z+Math.sin(a2)*dd;const s2=sc*(.22+v3*.25);
+   for(let k=0;k<(ALP||HL?1:2);k++){const v1=r(),v2=r(),v3=r();if(v1<.45)continue;const a2=v2*6.283,dd=sc*(1.4+v3*.8),xx=x+Math.cos(a2)*dd,zz=z+Math.sin(a2)*dd;const s2=sc*(.22+v3*.25);
     if(!clearRing(xx,zz,s2+(M==='widowmaker'||M==='desert'?5:0))||inFeat(xx,zz,s2))continue;props.push(xx,heightAt(xx,zz)-s2*.22,zz,0,v2*6.283,0,s2,(k+1)%3,M==='desert'?t*1.3:t,M==='desert'?t*.8:t,M==='desert'?t*.6:t,0);if(s2>.45)col.push(xx,zz,s2*1.05,1);}}}
  // ── fallen logs and stumps on the forest floor (nurse logs and giant mossy stumps on Shoreline)
  {const r=rng(seedOf(i,j,3)),N=3,cs=TILE/N,shore=M==='shoreline';
