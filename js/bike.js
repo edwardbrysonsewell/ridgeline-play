@@ -61,7 +61,7 @@ const RP={black:[.06,.12],char:[.19,.12],paper:[.31,.12],orange:[.44,.12],teal:[
 
 // ───────────────────────── geometry helpers
 const STATS={tris:0,calls:0};
-function prep(g){for(const k in g.attributes)if(!['position','normal','uv'].includes(k))g.deleteAttribute(k);
+function prep(g){for(const k in g.attributes)if(!['position','normal','uv','skinIndex','skinWeight'].includes(k))g.deleteAttribute(k);
  if(!g.attributes.normal)g.computeVertexNormals();
  if(!g.attributes.uv)g.setAttribute('uv',new THREE.BufferAttribute(new Float32Array(g.attributes.position.count*2),2));
  if(!g.index){const n=g.attributes.position.count,a=new Uint32Array(n);for(let i=0;i<n;i++)a[i]=i;g.setIndex(new THREE.BufferAttribute(a,1));}
@@ -71,10 +71,22 @@ function uvRect(g,r){const a=g.attributes.uv;for(let i=0;i<a.count;i++)a.setXY(i
 // zero-length normals (poles, degenerate caps) turn into NaN in the shader, which bloom then smears across the screen
 function fixNormals(g){const n=g.attributes.normal,p=g.attributes.position;if(!n)return g;
  for(let i=0;i<n.count;i++){const x=n.getX(i),y=n.getY(i),z=n.getZ(i),l=Math.hypot(x,y,z);if(!(l>1e-6))n.setXYZ(i,0,1,0);else if(Math.abs(l-1)>1e-3)n.setXYZ(i,x/l,y/l,z/l);}return g;}
-class Kit{constructor(){this.m=new Map();}
- add(mat,g,mx,uv){prep(g);if(mx)g.applyMatrix4(mx);if(uv)uvPt(g,uv);if(!this.m.has(mat))this.m.set(mat,[]);this.m.get(mat).push(g);return g;}
- build(parent,{shadow=true,off=null}={}){const out=[];for(const[mat,gs]of this.m){const g=fixNormals(mergeGeometries(gs));if(off)g.translate(-off.x,-off.y,-off.z);g.computeBoundingSphere();
-  const me=new THREE.Mesh(g,mat);me.castShadow=shadow&&mat!==M.rotor;me.receiveShadow=true;parent.add(me);out.push(me);STATS.tris+=g.index.count/3;STATS.calls++;}
+// Suspension parts move without extra draw calls: a kit built with a skeleton is one SkinnedMesh per material, each
+// part bound rigidly to the bone of the body it belongs to (kit.bone at add time), or blended between two bones
+// along its length (hoses, the coil spring, the chain runs) via skinT.
+function skinTo(g,b){const n=g.attributes.position.count,si=new Uint16Array(n*4),sw=new Float32Array(n*4);
+ for(let i=0;i<n;i++){si[i*4]=b;sw[i*4]=1;}g.setAttribute('skinIndex',new THREE.BufferAttribute(si,4));g.setAttribute('skinWeight',new THREE.BufferAttribute(sw,4));return g;}
+// weights by sweep ring: f(t) → [bone0, bone1, weight of bone1]; t = ring/n (sweeps without caps)
+function skinT(g,n,seg,f){const c=g.attributes.position.count,W=seg+1,si=new Uint16Array(c*4),sw=new Float32Array(c*4);
+ for(let k=0;k<c;k++){const[b0,b1,w]=f(Math.min(n,Math.floor(k/W))/n);si[k*4]=b0;si[k*4+1]=b1;sw[k*4]=1-w;sw[k*4+1]=w;}
+ g.setAttribute('skinIndex',new THREE.BufferAttribute(si,4));g.setAttribute('skinWeight',new THREE.BufferAttribute(sw,4));return g;}
+// bones are direct children of the kit's parent; bind pose = their transforms now
+function skeletonOf(bones){for(const b of bones)b.updateMatrix();return new THREE.Skeleton(bones,bones.map(b=>b.matrix.clone().invert()));}
+class Kit{constructor(bone=null){this.m=new Map();this.bone=bone;}
+ add(mat,g,mx,uv){prep(g);if(mx)g.applyMatrix4(mx);if(uv)uvPt(g,uv);if(this.bone!=null&&!g.attributes.skinIndex)skinTo(g,this.bone);if(!this.m.has(mat))this.m.set(mat,[]);this.m.get(mat).push(g);return g;}
+ build(parent,{shadow=true,off=null,skel=null}={}){const out=[];for(const[mat,gs]of this.m){const g=fixNormals(mergeGeometries(gs));if(off)g.translate(-off.x,-off.y,-off.z);g.computeBoundingSphere();
+  const me=skel?new THREE.SkinnedMesh(g,mat):new THREE.Mesh(g,mat);if(skel){me.bind(skel,new THREE.Matrix4());me.frustumCulled=false;}
+  me.castShadow=shadow&&mat!==M.rotor;me.receiveShadow=true;parent.add(me);out.push(me);STATS.tris+=g.index.count/3;STATS.calls++;}
   this.m.clear();return out;}}
 const _m4=new THREE.Matrix4();
 function between(a,b){const d=b.clone().sub(a),L=d.length();return new THREE.Matrix4().compose(a.clone().addScaledVector(d,.5),new THREE.Quaternion().setFromUnitVectors(Y,d.divideScalar(L)),V3(1,L,1));}
@@ -137,23 +149,29 @@ const bike=new THREE.Group();bike.name='bike';scene.add(bike);
 const bikeBody=new THREE.Group();bike.add(bikeBody);
 const RA=V3(0,.39,.63),FA=V3(0,.39,-.67),BB=V3(0,.36,.10),WR=.39;
 const HD=V3(0,.891,.454).normalize(),FWD=V3(0,HD.z,-HD.y);            // steering axis (63.0° head angle) and its forward normal
-const HTB=FA.clone().addScaledVector(FWD,-.05);HTB.addScaledVector(HD,(.89-HTB.y)/HD.y);   // 50 mm fork offset
+// FR lifts the head tube, crowns and cockpit along the steering axis so the fork has room for 200 mm of travel
+// (tyre top to lower-crown underside ≥ 0.205 m along the legs)
+const FR=.065;
+const HTB=FA.clone().addScaledVector(FWD,-.05);HTB.addScaledVector(HD,(.89+FR*HD.y-HTB.y)/HD.y);   // 50 mm fork offset
 const axisPt=t=>HTB.clone().addScaledVector(HD,t);
 const legPt=(t,sx=0)=>FA.clone().addScaledVector(HD,t).setX(sx);       // fork leg line, t = distance from the axle
 const ST=V3(0,.96,.28),stAt=y=>BB.clone().addScaledVector(ST,(y-BB.y)/ST.y);
 const CHX=.048;                                                        // chain line
 
-const F=new Kit();   // static frame + rear end + drivetrain
+// bones of the frame kit (children of bikeBody, posed in bike space by rearSuspension())
+const FB={};['frame','swing','stays','rocker','shock','shockBody','chainTop','chainBot'].forEach((n,i)=>{const b=new THREE.Bone();b.name=n;b.userData.i=i;bikeBody.add(b);FB[n]=b;});
+const fb=n=>FB[n].userData.i,CHN={};   // CHN: chain-run end points (bind pose)
+const F=new Kit(fb('frame'));   // frame + rear end + shock + drivetrain, one skinned mesh per material
 // ── front triangle
 F.add(M.paint,sweep(line(axisPt(-.008),axisPt(.135)),{n:6,seg:28,uv:UVF.ht,prof:t=>{const r=mix(.0355,.031,t)+.003*(sstep(.12,0,t)+sstep(.88,1,t));return{rx:r,ry:r};}}));
 for(const t of[-.016,.143])rod(F,M.black,axisPt(t-.009),axisPt(t+.009),.037,.037,24);
-const DT=CR([axisPt(.04),V3(0,.77,-.222),V3(0,.585,-.058),V3(0,.45,.045),BB.clone().add(V3(0,.01,.005))]);
+const DT=CR([axisPt(.04),V3(0,.77,-.222).addScaledVector(HD,FR*.55),V3(0,.585,-.058).addScaledVector(HD,FR*.18),V3(0,.45,.045),BB.clone().add(V3(0,.01,.005))]);
 F.add(M.paint,sweep(DT,{n:30,seg:24,uv:UVF.dt,prof:t=>({rx:mix(.03,.036,t),ry:mix(.044,.036,sstep(0,.45,t))+.012*sstep(.6,1,t),p:2.6})}));
 F.add(M.rubber,sweep(DT,{n:12,seg:8,arc:[-.2,.2],prof:t=>({rx:.039,ry:.051,p:2.6})}),null).applyMatrix4(new THREE.Matrix4());
 // down-tube guard only on the lower half (rebuilt for a sub-range)
 F.m.get(M.rubber).pop();
 F.add(M.rubber,sweep(t=>DT.getPoint(mix(.55,.97,t)),{n:10,seg:8,arc:[-.22,.22],prof:t=>{const u=mix(.55,.97,t);return{rx:mix(.03,.036,u)*1.08,ry:(.036+.012*sstep(.6,1,u))*1.08,p:2.6};}}));
-const TT=CR([axisPt(.105),V3(0,.952,-.12),V3(0,.86,.08),stAt(.80)]);
+const TT=CR([axisPt(.105),V3(0,.952,-.12).addScaledVector(HD,FR*.6),V3(0,.86,.08).addScaledVector(HD,FR*.22),stAt(.80)]);
 F.add(M.paint,sweep(TT,{n:22,seg:16,uv:UVF.tt,prof:t=>({rx:mix(.023,.019,t),ry:mix(.032,.021,t),p:2.4})}));
 F.add(M.paint,sweep(line(BB,stAt(.87)),{n:8,seg:16,prof:t=>({rx:mix(.024,.019,t),ry:mix(.026,.019,t),p:2.2})}),null,PT.orange);
 rod(F,M.black,stAt(.855),stAt(.88),.0205,.0205,16);
@@ -165,40 +183,70 @@ rod(F,M.black,stAt(.86),stAt(.955),.0158,.0158,14);
 xcyl(F,M.paint,BB,.0235,.088,20,PT.orange);
 for(const s of[-1,1])xcyl(F,M.black,BB.clone().setX(s*.05),.021,.012,20);
 // ── suspension: shock mounts, coil shock, rocker
-const SL=V3(0,.60,-.09),SU=V3(0,.77,.13),PIV=stAt(.73),SSP=V3(0,.79,.31),MP=V3(0,.465,.17);
+// Rear end = four-bar: frame, swingarm (chainstays, MP→RA), seat stays (pivot concentric with the axle, RA→SSP),
+// rocker (about PIV, carrying the seat-stay eye SSP and the shock's upper eye SU). Points chosen for a DH curve:
+// leverage 2.8 at top-out easing to 2.6, 75 mm of shock stroke for 200 mm of wheel travel, 42° of rocker swing; the
+// seat-stay eye stays behind the seat tube and the rocker plates sit outboard of the tyre all the way through.
+const SL=V3(0,.60,-.09),SU=V3(0,.77,.16),PIV=stAt(.67),SSP=V3(0,.73,.40),MP=V3(0,.465,.17);
+const SHK={L0:SU.distanceTo(SL)};   // shock eye-to-eye at top-out
 F.add(M.paint,plateYZ(hullCircles([[SL.z,SL.y,.017],[-.125,.555,.02],[-.04,.53,.02]]),0,.034,.004),null,PT.orange);
+xcyl(F,M.alloy,SL,.0055,.046,8);
 {const sd=SU.clone().sub(SL),sl=sd.length();sd.normalize();const Sp=f=>SL.clone().addScaledVector(sd,f);const up=V3().crossVectors(sd,X).normalize();
- xcyl(F,M.black,SL,.013,.036,16);xcyl(F,M.black,SU,.012,.03,16);xcyl(F,M.alloy,SL,.0055,.046,8);xcyl(F,M.alloy,SU,.0055,.078,8);
+ // shaft side, rotating about the lower eye
+ F.bone=fb('shock');
+ xcyl(F,M.black,SL,.013,.036,16);
  rod(F,M.black,Sp(0),Sp(.028),.012,.012,12);
  rod(F,M.alloy,Sp(.02),Sp(.13),.0068,.0068,12);
  rod(F,M.black,Sp(.024),Sp(.031),.032,.032,24);                         // lower spring seat
- rod(F,M.rubber,Sp(.098),Sp(.114),.012,.017,14);                          // bottom-out bumper
+ rod(F,M.rubber,Sp(.096),Sp(.112),.012,.0168,14);                         // bottom-out bumper
+ // body side: slides down the shaft by the stroke
+ F.bone=fb('shockBody');
+ xcyl(F,M.black,SU,.012,.03,16);
  rod(F,M.black,Sp(.112),Sp(sl-.012),.0178,.0178,18);                      // damper body
+ rod(F,M.black,Sp(.112),Sp(.118),.0186,.0186,18);                         // seal head
  rod(F,M.accent,Sp(sl-.074),Sp(sl-.06),.0325,.0325,24);                   // preload collar
  rod(F,M.black,Sp(sl-.03).addScaledVector(up,.036),Sp(sl-.11).addScaledVector(up,.036),.0135,.0135,16);  // piggyback
  rod(F,M.gold,Sp(sl-.11).addScaledVector(up,.036),Sp(sl-.116).addScaledVector(up,.036),.0137,.0137,16);
  rod(F,M.black,Sp(sl-.028),Sp(sl-.028).addScaledVector(up,.036),.009,.009,10);
  rod(F,M.accent,Sp(sl-.02).addScaledVector(up,.02).add(V3(.016,0,0)),Sp(sl-.02).addScaledVector(up,.02).add(V3(.026,0,0)),.006,.006,10);  // rebound knob
- const coils=7.5,a0=.033,a1=sl-.077,Rs=.0285;
- F.add(M.spring,sweep(t=>{const th=t*coils*TAU;return Sp(mix(a0,a1,t)).addScaledVector(X,Math.cos(th)*Rs).addScaledVector(up,Math.sin(th)*Rs);},{n:Math.round(coils*22),seg:7,ref:null,prof:()=>({rx:.0042})}));}
-for(const s of[-1,1]){F.add(M.black,plateYZ(hullCircles([[PIV.z,PIV.y,.021],[SU.z,SU.y,.018],[SSP.z,SSP.y,.018]]),s*.036,.009,.002));}
-for(const p of[PIV,SSP]){xcyl(F,M.alloy,p,.0068,.092,10);for(const s of[-1,1])xcyl(F,M.black,p.clone().setX(s*.046),.0105,.006,12);}
-F.add(M.paint,plateYZ(hullCircles([[PIV.z,PIV.y,.024],[stAt(.70).z-.01,.70,.02]]),0,.05,.004),null,PT.orange);  // rocker pivot lug
+ // coil: each turn blended between the two ends, so it compresses evenly and the wire stays round
+ const coils=7.5,a0=.033,a1=sl-.077,Rs=.0285,n=Math.round(coils*22);
+ F.add(M.spring,skinT(sweep(t=>{const th=t*coils*TAU;return Sp(mix(a0,a1,t)).addScaledVector(X,Math.cos(th)*Rs).addScaledVector(up,Math.sin(th)*Rs);},{n,seg:7,ref:null,prof:()=>({rx:.0042})}),n,7,t=>[fb('shock'),fb('shockBody'),t]));}
+// rocker: a plate either side, outboard of the tyre (its rear arm passes within 2 cm of the tread at full travel);
+// two arms from the pivot (shock eye forward, seat-stay eye rearward), spacers on the shock and pivot bolts
+F.bone=fb('rocker');
+{const RX=.05,mid=PIV.clone().lerp(SSP,.5).addScaledVector(V3(0,SSP.z-PIV.z,-(SSP.y-PIV.y)).normalize(),.01);
+ for(const s of[-1,1]){F.add(M.black,plateYZ(hullCircles([[PIV.z,PIV.y,.024],[SU.z,SU.y,.019]]),s*RX,.009,.002));
+  F.add(M.black,plateYZ(hullCircles([[PIV.z,PIV.y,.024],[mid.z,mid.y,.018],[SSP.z,SSP.y,.019]]),s*RX,.009,.002));
+  rod(F,M.alloy,SU.clone().setX(s*.015),SU.clone().setX(s*(RX-.004)),.009,.009,12);
+  rod(F,M.alloy,PIV.clone().setX(s*.025),PIV.clone().setX(s*(RX-.004)),.011,.011,12);}
+ xcyl(F,M.alloy,SU,.0055,2*RX+.022,8);
+ xcyl(F,M.alloy,PIV,.0068,2*RX+.02,10);for(const s of[-1,1])xcyl(F,M.black,PIV.clone().setX(s*(RX+.008)),.0105,.006,12);}
+xcyl(F,M.alloy,SSP,.0068,.164,10);for(const s of[-1,1])xcyl(F,M.black,SSP.clone().setX(s*.08),.0105,.006,12);
+F.bone=fb('frame');
+F.add(M.paint,plateYZ(hullCircles([[PIV.z,PIV.y,.026],[stAt(.62).z-.008,.62,.02]]),0,.05,.004),null,PT.orange);  // rocker pivot lug
 // ── rear triangle
+// swingarm (chainstays, dropouts, axle) about MP; seat stays pivot on the axle (outboard of the dropouts) and
+// run up to the rocker, outboard of its plates. No stay bridge: anywhere below SSP would be inside the tyre's sweep.
 const SS=[],CS=[];
 for(const s of[-1,1]){
+ F.bone=fb('swing');
  const cs=CR([V3(s*.04,MP.y,MP.z),V3(s*.062,.447,.34),V3(s*.069,.41,.56),V3(s*.071,.392,.625)]);CS.push(cs);
  F.add(M.paint,sweep(cs,{n:22,seg:14,uv:UVF.cs,prof:t=>({rx:.0115,ry:mix(.027,.016,t),p:3.2})}));
- const ss=CR([V3(s*.071,.405,.62),V3(s*.066,.575,.48),V3(s*.047,.735,.355),V3(s*.036,SSP.y,SSP.z)]);SS.push(ss);
- F.add(M.paint,sweep(ss,{n:20,seg:14,prof:t=>({rx:mix(.011,.013,t),ry:mix(.013,.018,t),p:2.4})}),null,PT.orange);
  F.add(M.paint,plateYZ(hullCircles([[RA.z,RA.y,.027],[.585,.415,.02],[.6,.44,.018]]),s*.073,.012,.003),null,PT.orange);
- xcyl(F,M.black,RA.clone().setX(s*.083),.016,.01,16);
+ F.bone=fb('stays');
+ const ss=CR([V3(s*.093,RA.y+.012,RA.z-.004),V3(s*.087,.52,.555),V3(s*.076,.635,.475),V3(s*.068,SSP.y,SSP.z)]);SS.push(ss);
+ F.add(M.paint,sweep(ss,{n:20,seg:14,prof:t=>({rx:mix(.011,.012,t),ry:mix(.015,.017,t),p:2.4})}),null,PT.orange);
+ F.add(M.paint,plateYZ(hullCircles([[RA.z,RA.y,.024],[RA.z-.012,RA.y+.03,.016]]),s*.093,.01,.003),null,PT.orange);
+ F.bone=fb('swing');
+ xcyl(F,M.black,RA.clone().setX(s*.105),.016,.01,16);
 }
-rod(F,M.paint,SS[0].getPoint(.82),SS[1].getPoint(.82),.011,.011,10,PT.orange);
+F.bone=fb('swing');
 rod(F,M.paint,V3(-.045,MP.y,MP.z),V3(.045,MP.y,MP.z),.021,.021,18,PT.orange);
-xcyl(F,M.alloy,MP,.0075,.11,10);for(const s of[-1,1])xcyl(F,M.black,MP.clone().setX(s*.052),.013,.007,14);
 {const a=CS[0].getPoint(.25),b=CS[1].getPoint(.25);rod(F,M.paint,a,b,.012,.012,10,PT.orange);}
-xcyl(F,M.alloy,RA,.0085,.18,12);
+xcyl(F,M.alloy,RA,.0085,.22,12);
+F.bone=fb('frame');
+xcyl(F,M.alloy,MP,.0075,.11,10);for(const s of[-1,1])xcyl(F,M.black,MP.clone().setX(s*.052),.013,.007,14);
 // ── brakes (rear caliper on the left seat stay) and cables
 function caliper(kit,c,ctr,ang,xr,mountTo){ // c = rotor centre, caliper centred at polar angle `ang` (in the y,−z plane), on the rotor plane x=xr
  const arc=t=>{const a=ang+(t-.5)*.62;return V3(xr,c.y+Math.cos(a)*.094,c.z-Math.sin(a)*.094);};
@@ -206,14 +254,20 @@ function caliper(kit,c,ctr,ang,xr,mountTo){ // c = rotor centre, caliper centred
  kit.add(M.gold,sweep(arc,{n:4,seg:10,ref:X,prof:()=>({rx:.0195,ry:.009,p:4,oy:.008})}));
  const m=arc(.5);if(mountTo)rod(kit,M.black,m.clone().setX(xr-.012),mountTo,.008,.01,8);
 }
-caliper(F,RA,null,.9,-.06,SS[0].getPoint(.18).add(V3(.004,0,0)));
-const hose=(kit,pts,r=.0027,mat=M.rubber)=>kit.add(mat,sweep(CR(pts),{n:Math.max(8,pts.length*8),seg:6,ref:null,prof:()=>({rx:r})}));
-hose(F,[V3(-.075,.47,.57),V3(-.068,.49,.48),V3(-.058,.475,.34),V3(-.05,.49,.22),DT.getPoint(.8).add(V3(-.036,.012,0)),DT.getPoint(.45).add(V3(-.034,.02,0)),DT.getPoint(.12).add(V3(-.032,.03,.0)),axisPt(.06).add(V3(-.03,0,.02))]);
-hose(F,[V3(.085,.33,.672),V3(.09,.36,.70),V3(.08,.43,.62),V3(.066,.462,.42),V3(.058,.48,.24),DT.getPoint(.8).add(V3(.036,.012,0)),DT.getPoint(.45).add(V3(.034,.02,0)),DT.getPoint(.12).add(V3(.032,.03,.0)),axisPt(.06).add(V3(.03,0,.02))],.0025,M.black);
+// the caliper rides the seat stay, which pivots about the axle, so it stays on the rotor through the travel
+F.bone=fb('stays');caliper(F,RA,null,.9,-.06,SS[0].getPoint(.18).add(V3(.004,0,0)));F.bone=fb('frame');
+// hoses: f(t) gives the bones along the hose (see skinT); blends happen where a hose crosses a pivot
+const hose=(kit,pts,r=.0027,mat=M.rubber,f=null)=>{const n=Math.max(8,pts.length*8),g=sweep(CR(pts),{n,seg:6,ref:null,prof:()=>({rx:r})});if(f)skinT(g,n,6,f);return kit.add(mat,g);};
+const along=(t,ks,bs)=>{for(let i=0;i<ks.length;i++)if(t<ks[i][1])return t<ks[i][0]?[bs[i],bs[i],0]:[bs[i],bs[i+1],sstep(ks[i][0],ks[i][1],t)];return[bs[bs.length-1],bs[bs.length-1],0];};
+hose(F,[V3(-.075,.47,.57),V3(-.068,.49,.48),V3(-.058,.475,.34),V3(-.05,.49,.22),DT.getPoint(.8).add(V3(-.036,.012,0)),DT.getPoint(.45).add(V3(-.034,.02,0)),DT.getPoint(.12).add(V3(-.032,.03,.0)),axisPt(.06).add(V3(-.03,0,.02))],.0027,M.rubber,
+ t=>along(t,[[0,1/7],[3/7,4/7]],[fb('stays'),fb('swing'),fb('frame')]));
+hose(F,[V3(.085,.33,.672),V3(.09,.36,.70),V3(.08,.43,.62),V3(.066,.462,.42),V3(.058,.48,.24),DT.getPoint(.8).add(V3(.036,.012,0)),DT.getPoint(.45).add(V3(.034,.02,0)),DT.getPoint(.12).add(V3(.032,.03,.0)),axisPt(.06).add(V3(.03,0,.02))],.0025,M.black,
+ t=>along(t,[[4/8,5/8]],[fb('swing'),fb('frame')]));
 // ── drivetrain: bash guard, chain guide, derailleur, cassette pulley cage, chain
 F.add(M.rubber,plateYZ(circlePts(BB.z,BB.y,.09,48),.066,.006,.0015,[circlePts(BB.z,BB.y,.072,40)]));
 F.add(M.black,plateYZ(hullCircles([[BB.z+.045,BB.y+.08,.012],[BB.z+.075,BB.y+.06,.012]]),CHX,.022,.003));
 const JU=V3(CHX,.345,.648),JL=V3(CHX,.29,.668),RING=.0647,COG=.0303;
+F.bone=fb('swing');   // hanger, derailleur and cage hang off the dropout
 {const hz=RA.z+.02;F.add(M.black,plateYZ(hullCircles([[RA.z,RA.y,.016],[hz,RA.y-.035,.012]]),.083,.007));
  F.add(M.black,sweep(CR([V3(.088,RA.y-.035,hz),V3(.094,RA.y-.045,hz+.03),V3(.085,RA.y-.05,hz+.035),V3(.074,JU.y+.012,JU.z+.008)]),{n:10,seg:10,ref:X,prof:t=>({rx:.011,ry:.016,p:3})}));
  for(const s of[-1,1])F.add(s>0?M.accent:M.black,plateYZ(hullCircles([[JU.z,JU.y,.02],[JL.z,JL.y,.02]]),CHX+s*.009,.004,.001));
@@ -226,17 +280,24 @@ const JU=V3(CHX,.345,.648),JL=V3(CHX,.29,.668),RING=.0647,COG=.0303;
  for(let i=0;i<=4;i++)pts.push(P(JU,.019,-Math.PI/2-Math.PI*.8*i/4));              // up the front of the upper jockey
  for(let i=1;i<=6;i++)pts.push(P(C2,r2,-Math.PI/2+Math.PI*i/6));                   // round the back of the cog to the top
  pts.push(V3(CHX,C2.y+r2,C2.z-.1));
- const curve=CR(pts,true);const len=curve.getLength();
+ const curve=CR(pts,true);const len=curve.getLength(),N=pts.length;
  const g=sweep(curve,{n:260,seg:4,closed:true,ref:X,prof:()=>({rx:.0042,ry:.0045,p:5})});
  const a=g.attributes.uv;for(let i=0;i<a.count;i++)a.setX(i,a.getX(i)*len/.0254);
- F.add(M.chain,g);}
+ // ring wrap on the frame, jockey + cog wrap on the swingarm, and the two free runs on bones that swing and
+ // stretch each run from its chainring tangent to its (moving) far end. Point k of the closed curve is at t = k/N.
+ skinT(g,260,4,t=>{const b=t<=10/N?fb('frame'):t<=12/N?fb('chainBot'):t<=28/N?fb('swing'):fb('chainTop');return[b,b,0];});
+ Object.assign(CHN,{At:pts[0].clone(),Bt:pts[28].clone(),Ab:pts[10].clone(),Bb:pts[12].clone()});
+ F.bone=fb('frame');F.add(M.chain,g);}
 // ── saddle
 {const nose=V3(0,.986,.165),tail=V3(0,.997,.405);const sc=CR([nose,V3(0,.982,.27),tail]);
  F.add(M.rubber,sweep(sc,{n:18,seg:20,caps:[true,true],prof:t=>({rx:pwl([0,.25,.5,.85,1],[.016,.022,.034,.068,.05],t),ry:pwl([0,.2,.85,1],[.014,.02,.024,.02],t),p:2.8,oy:-.004*Math.sin(t*Math.PI)})}));
  F.add(M.accent,sweep(sc,{n:12,seg:8,arc:[.42,.58],prof:t=>({rx:pwl([0,.25,.5,.85,1],[.016,.022,.034,.068,.05],t)*1.01,ry:pwl([0,.2,.85,1],[.014,.02,.024,.02],t)*1.02,p:2.8,oy:-.004*Math.sin(t*Math.PI)})}));
  for(const s of[-1,1])rod(F,M.alloy,V3(s*.018,.962,.205),V3(s*.028,.968,.375),.0035,.0035,6);
  rod(F,M.black,stAt(.95),stAt(.95).add(V3(0,.018,.008)),.016,.012,12);}
-F.build(bikeBody);
+// bind pose: each bone on its pivot; the chain-run bones aligned with their runs (they stretch along local z)
+FB.swing.position.copy(MP);FB.stays.position.copy(RA);FB.rocker.position.copy(PIV);FB.shock.position.copy(SL);FB.shockBody.position.copy(SL);
+for(const[b,A,B]of[[FB.chainTop,CHN.At,CHN.Bt],[FB.chainBot,CHN.Ab,CHN.Bb]]){b.position.copy(A);b.quaternion.setFromUnitVectors(Z,B.clone().sub(A).normalize());}
+F.build(bikeBody,{skel:skeletonOf(Object.values(FB))});
 
 // ═════════════════════════════════════════════════════════════ wheels
 function tyreGeo(){
@@ -283,19 +344,28 @@ const RW=makeWheel(false),FW=makeWheel(true);RW.outer.position.copy(RA);bikeBody
 
 // ═════════════════════════════════════════════════════════════ fork + cockpit (steers about HD through HTB)
 const fork=new THREE.Group();fork.position.copy(HTB);bikeBody.add(fork);
-const FK=new Kit();
-const TLC=.5275,TUC=.7015;                     // lower / upper crown, distance from the axle along the legs
+// two bones under the steering group: 0 = upper assembly (crowns, stanchions, cockpit), 1 = lowers, which slide up
+// the legs by the fork stroke (front wheel, axle, arch, caliper ride on them)
+const FKB=['forkUpper','forkLowers'].map((n,i)=>{const b=new THREE.Bone();b.name=n;b.userData.i=i;fork.add(b);return b;});
+const FK=new Kit(0);
+// lower / upper crown and top of the lowers (seal), distance from the axle along the legs: 213 mm of stanchion shows
+// above the seals and the tyre clears the lower crown by 206 mm at top-out
+const TLC=.545+FR,TUC=.7015+FR,LW=.30+FR;
 for(const s of[-1,1]){const sx=s*.07;
- FK.add(M.paint,sweep(line(legPt(-.028,sx),legPt(.33,sx)),{n:10,seg:20,uv:UVF.low,caps:[true,false],prof:t=>{const r=mix(.0262,.0288,t)+.002*sstep(.93,1,t);return{rx:r,ry:r*1.04,capBulge:.008};}}));
- rod(FK,M.rubber,legPt(.326,sx),legPt(.345,sx),.0245,.0215,20);
- rod(FK,M.gold,legPt(.33,sx),legPt(TUC+.035,sx),.0192,.0192,22);
+ FK.bone=1;
+ FK.add(M.paint,sweep(line(legPt(-.028,sx),legPt(LW,sx)),{n:10,seg:20,uv:UVF.low,caps:[true,false],prof:t=>{const r=mix(.0262,.0288,t)+.002*sstep(.93,1,t);return{rx:r,ry:r*1.04,capBulge:.008};}}));
+ rod(FK,M.rubber,legPt(LW-.004,sx),legPt(LW+.015,sx),.0245,.0215,20);
+ xcyl(FK,M.black,legPt(0,sx),.019,.032,16);
+ FK.bone=0;
+ rod(FK,M.gold,legPt(LW-.05,sx),legPt(TUC+.035,sx),.0192,.0192,22);
  rod(FK,M.black,legPt(TUC+.035,sx),legPt(TUC+.047,sx),.0198,.0198,20);
  rod(FK,s>0?M.accent:M.gold,legPt(TUC+.047,sx),legPt(TUC+.058,sx),.009,.009,12);
- xcyl(FK,M.black,legPt(0,sx),.019,.032,16);
 }
+FK.bone=1;
 xcyl(FK,M.alloy,FA,.0088,.19,12);rod(FK,M.black,FA.clone().setX(.096),FA.clone().add(V3(.1,-.0,.055)),.005,.004,6);
-// arch over the tyre
-FK.add(M.paint,sweep(CR([legPt(.25,-.07).addScaledVector(FWD,.02),legPt(.34,-.045).addScaledVector(FWD,.036),legPt(.43,0).addScaledVector(FWD,.046),legPt(.34,.045).addScaledVector(FWD,.036),legPt(.25,.07).addScaledVector(FWD,.02)]),{n:24,seg:12,ref:null,prof:t=>({rx:.0125,ry:.017,p:2.6})}),null,PT.gloss);
+// arch: clear of the tyre, and far enough forward to pass in front of the lower crown at full travel
+FK.add(M.paint,sweep(CR([legPt(.22,-.07).addScaledVector(FWD,.024),legPt(.32,-.058).addScaledVector(FWD,.05),legPt(.41,0).addScaledVector(FWD,.078),legPt(.32,.058).addScaledVector(FWD,.05),legPt(.22,.07).addScaledVector(FWD,.024)]),{n:24,seg:12,ref:null,prof:t=>({rx:.0125,ry:.017,p:2.6})}),null,PT.gloss);
+FK.bone=0;
 // crowns (extruded outlines in the plane normal to the steering axis)
 for(const [t,th] of [[TLC,.034],[TUC,.026]]){const sh=hullCircles([[-.07,0,.031],[.07,0,.031],[0,-.05,.031],[-.035,.006,.03],[.035,.006,.03]],16);
  const g=new THREE.ExtrudeGeometry(shapeOf(sh),{depth:th-.006,bevelEnabled:true,bevelThickness:.003,bevelSize:.003,bevelSegments:2,curveSegments:8});
@@ -303,7 +373,7 @@ for(const [t,th] of [[TLC,.034],[TUC,.026]]){const sh=hullCircles([[-.07,0,.031]
  for(const s of[-1,1])xcyl(FK,M.alloy,legPt(t,s*.07).addScaledVector(FWD,.034).addScaledVector(HD,0),.0045,.03,8);}
 rod(FK,M.black,axisPt(.13),axisPt(.165),.018,.018,16);
 // direct-mount stem + bar
-const BC=legPt(.745,0).addScaledVector(FWD,.006);
+const BC=legPt(.745+FR,0).addScaledVector(FWD,.006);
 for(const s of[-1,1])FK.add(M.black,sweep(CR([legPt(TUC+.012,s*.026).addScaledVector(FWD,-.048),legPt(TUC+.022,s*.026).addScaledVector(FWD,-.01),BC.clone().setX(s*.026)]),{n:8,seg:12,ref:X,caps:[true,true],prof:()=>({rx:.0075,ry:.016,p:4})}));
 FK.add(M.black,sweep(line(BC.clone().setX(-.03),BC.clone().setX(.03)),{n:2,seg:20,ref:Y,prof:()=>({rx:.0215})}));
 FK.add(M.alloy,sweep(line(BC.clone().add(V3(-.024,0,-.004)),BC.clone().add(V3(.024,0,-.004))),{n:2,seg:20,ref:Y,arc:[.3,.7],prof:()=>({rx:.0222})}));
@@ -337,12 +407,15 @@ for(const s of[-1,1])FK.add(M.rubber,sweep(t=>barAt(s*(.4+t*.008)),{n:1,seg:14,r
  gb.computeVertexNormals();gb.rotateX(-.2);gb.translate(c.x,c.y,c.z);FK.add(M.paint,gb,null,PT.paper);
  for(const s of[-1,1])rod(FK,M.black,c.clone().add(V3(s*.06,-.04,.01)),barAt(s*.06).add(V3(0,0,-.005)),.003,.003,5);}
 const FCAL=[-.058];
-hose(FK,[barAt(-.2).add(V3(0,.008,-.03)),barAt(-.16).add(V3(-.01,-.03,-.11)),legPt(.6,-.11).addScaledVector(FWD,.02),legPt(.42,-.105),legPt(.2,-.1).addScaledVector(FWD,-.02),legPt(.1,-.092).addScaledVector(FWD,-.04)]);
+// front brake hose: a loop in front of the crowns takes up the stroke (blended from the upper assembly to the lowers)
+hose(FK,[barAt(-.2).add(V3(0,.008,-.03)),barAt(-.16).add(V3(-.01,-.03,-.11)),legPt(TUC-.04,-.112).addScaledVector(FWD,.045),legPt(TLC-.06,-.118).addScaledVector(FWD,.06),legPt(LW-.02,-.112).addScaledVector(FWD,.04),legPt(.2,-.1).addScaledVector(FWD,-.02),legPt(.1,-.092).addScaledVector(FWD,-.04)],.0027,M.rubber,
+ t=>along(t,[[3/6,5/6]],[0,1]));
 hose(FK,[barAt(.2).add(V3(0,.008,-.03)),barAt(.15).add(V3(.02,-.06,-.12)),axisPt(.05).add(V3(.04,-.02,-.07)),axisPt(.06).add(V3(.03,0,.02))]);
 hose(FK,[barAt(.185).add(V3(.01,-.02,-.01)),barAt(.13).add(V3(.03,-.08,-.1)),axisPt(.04).add(V3(.045,-.02,-.05)),axisPt(.06).add(V3(.03,0,.02))],.0025,M.black);
-{const ang=Math.atan2(-(.94),.33);caliper(FK,FA,null,-1.25,-.058,legPt(.05,-.075).addScaledVector(FWD,-.02));}
+FK.bone=1;caliper(FK,FA,null,-1.25,-.058,legPt(.05,-.075).addScaledVector(FWD,-.02));
 FW.outer.position.copy(FA).sub(HTB);fork.add(FW.outer);
-FK.build(fork,{off:HTB});
+FK.build(fork,{off:HTB,skel:skeletonOf(FKB)});
+function frontSuspension(sF){SUSP.sF=sF;FKB[1].position.copy(HD).multiplyScalar(sF);FW.outer.position.copy(FA).sub(HTB).addScaledVector(HD,sF);}
 
 // ═════════════════════════════════════════════════════════════ cranks & pedals
 const crank=new THREE.Group();crank.position.copy(BB);bikeBody.add(crank);
@@ -385,12 +458,18 @@ function gripFrames(steer){qSteer.setFromAxisAngle(HD,steer);
   g.U.copy(Y).applyQuaternion(qSteer);g.U.addScaledVector(g.A,-g.U.dot(g.A)).normalize();g.K.crossVectors(g.A,g.U);});}
 const pedalPos=(i,c,out)=>{const s=i?1:-1,a=i?c:c+Math.PI;return out.set(s*.138,BB.y+Math.sin(a)*PL,BB.z+Math.cos(a)*PL);};
 const FOOT=[{o:V3(),f:V3(),u:V3(),k:V3()},{o:V3(),f:V3(),u:V3(),k:V3()}];
-// P: crouch 0..1, ext 0..1 (air extension), brake, lean (rider counter-lean, rad), shift (lateral hip shift), crank (visual), headPitch, headRoll, kneeIn[2]
+const BUTT=[[-.08,-.215],[-.02,-.186],[.03,-.16],[.06,-.141],[.09,-.128],[.12,-.106],[.14,-.091],[.155,-.064],[.16,-.04]];
+// P: crouch 0..1, ext 0..1 (air extension), ra (rear axle, for tyre clearance), brake, lean (rider counter-lean, rad), shift (lateral hip shift), crank (visual), headPitch, headRoll, kneeIn[2]
 function solve(P){
  const c=P.crouch,e=P.ext;
  const rz=new THREE.Matrix4().makeRotationZ(-P.lean);
- J.hipC.set(P.shift,1.13-.19*c+.07*e-.03*P.brake,.25+.04*c+.06*P.brake-.03*e).applyMatrix4(rz);
- const th=.66+.2*c-.14*e+.06*P.brake;J.dS.set(0,Math.cos(th),-Math.sin(th)).applyMatrix4(rz);
+ // fore = weight forward (+, over the bars) or back (−, hips behind the saddle)
+ const fo=P.fore||0;
+ J.hipC.set(P.shift,1.13-.19*c+.07*e-.03*P.brake-.035*Math.abs(fo),.25+.04*c+.06*P.brake-.03*e-.085*fo).applyMatrix4(rz);
+ // with the hips low and back and the rear end deep in its travel the tyre would reach the seat of the shorts: lift the
+ // hips just enough to keep the backside (BUTT: its profile relative to the hip centre) 13 mm clear of the tread
+ if(P.ra){let lift=0;for(const[dz,dy]of BUTT){const z=J.hipC.z+dz-P.ra.z,q=.4*.4-z*z;if(q>0)lift=Math.max(lift,P.ra.y+Math.sqrt(q)-J.hipC.y-dy);}J.hipC.y+=lift;}
+ const th=.66+.2*c-.14*e+.06*P.brake+.12*fo;J.dS.set(0,Math.cos(th),-Math.sin(th)).applyMatrix4(rz);
  J.lat.set(1,0,0).applyMatrix4(rz);J.back.crossVectors(J.lat,J.dS).normalize();J.front.copy(J.back).negate();
  J.pelvY.copy(J.dS).multiplyScalar(.65).addScaledVector(_d.set(0,1,0).applyMatrix4(rz),.35).normalize();
  J.shC.copy(J.hipC).addScaledVector(J.dS,LEN.spine);
@@ -579,10 +658,37 @@ eye.userData.fpPitch=-.48;bones.head.add(eye);
 // ═════════════════════════════════════════════════════════════ animation
 const ST8={wspd:0,crouch:.35,crouchV:0,ext:0,lean:0,brake:0,air:false,lastCrank:null,crankOff:0,pedalling:0,headPitch:.3};
 function wrapPI(a){a=(a+Math.PI)%TAU;if(a<0)a+=TAU;return a-Math.PI;}
+// ── rear linkage: solve the four-bar for a rear-axle rise sR (m, relative to the frame) and pose the bones.
+// Angles are directions in the bike's side plane, atan2(y, z); a bone turned by Δ there is a rotation of −Δ about X.
+const ang=(a,b)=>Math.atan2(b.y-a.y,b.z-a.z);
+const rotYZ=(p,c,a,out)=>{const z=p.z-c.z,y=p.y-c.y,C=Math.cos(a),S=Math.sin(a);return out.set(p.x,c.y+z*S+y*C,c.z+z*C-y*S);};
+const LK={cs:Math.hypot(RA.y-MP.y,RA.z-MP.z),ss:Math.hypot(SSP.y-RA.y,SSP.z-RA.z),rk:Math.hypot(SSP.y-PIV.y,SSP.z-PIV.z),
+ aCS:ang(MP,RA),aSS:ang(RA,SSP),aRK:ang(PIV,SSP),aSH:ang(SL,SU),side:Math.sign((PIV.z-RA.z)*(SSP.y-RA.y)-(PIV.y-RA.y)*(SSP.z-RA.z)),
+ tLen:CHN.At.distanceTo(CHN.Bt),bLen:CHN.Ab.distanceTo(CHN.Bb)};
+const SUSP={sR:0,sF:0,stroke:0,ra:RA.clone(),ssp:SSP.clone(),su:SU.clone()};STATS.susp=SUSP;   // last solved state (for tools)
+const _rb=V3(),_rd=V3();
+function rearSuspension(sR){
+ const dCS=Math.asin(cl((RA.y+sR-MP.y)/LK.cs,-1,1))-LK.aCS;const ra=rotYZ(RA,MP,dCS,SUSP.ra);
+ // seat-stay eye = circle(RA′, stay) ∩ circle(PIV, rocker arm), on the same side of RA′→PIV as at top-out
+ const dz=PIV.z-ra.z,dy=PIV.y-ra.y,D=Math.hypot(dz,dy),k=(LK.ss*LK.ss-LK.rk*LK.rk+D*D)/(2*D),h=LK.side*Math.sqrt(Math.max(0,LK.ss*LK.ss-k*k)),ez=dz/D,ey=dy/D;
+ const ssp=SUSP.ssp.set(0,ra.y+ey*k+ez*h,ra.z+ez*k-ey*h);
+ const dRK=ang(PIV,ssp)-LK.aRK,dSS=ang(ra,ssp)-LK.aSS,su=rotYZ(SU,PIV,dRK,SUSP.su);
+ const L=Math.hypot(su.y-SL.y,su.z-SL.z);SUSP.sR=sR;SUSP.stroke=SHK.L0-L;
+ FB.swing.quaternion.setFromAxisAngle(X,-dCS);
+ FB.stays.position.copy(ra);FB.stays.quaternion.setFromAxisAngle(X,-dSS);
+ FB.rocker.quaternion.setFromAxisAngle(X,-dRK);
+ // shock: turns about its lower eye to point at SU′; the body side slides down the shaft by the stroke
+ FB.shock.quaternion.setFromAxisAngle(X,-(ang(SL,su)-LK.aSH));FB.shockBody.quaternion.copy(FB.shock.quaternion);
+ _rd.subVectors(su,SL).normalize();FB.shockBody.position.copy(SL).addScaledVector(_rd,-SUSP.stroke);
+ // chain runs: from the fixed chainring tangent to the far end carried by the swingarm
+ for(const[b,A,B,L0]of[[FB.chainTop,CHN.At,CHN.Bt,LK.tLen],[FB.chainBot,CHN.Ab,CHN.Bb,LK.bLen]]){
+  rotYZ(B,MP,dCS,_rb).sub(A);const l=_rb.length();b.quaternion.setFromUnitVectors(Z,_rb.divideScalar(l));b.scale.set(1,1,l/L0);}
+ RW.outer.position.copy(ra);}
 // o = {steer (rad, fork angle), wheel (rad), crank (rad), crouch (0..1), lean (rad, + = left), air (bool), brake (0..1), dt}
 function updateBikePose(o){
  const dt=Math.min(o.dt||.016,.05),S=ST8;
  fork.quaternion.setFromAxisAngle(HD,o.steer);
+ rearSuspension(cl(o.sR||0,0,.2));frontSuspension(cl(o.sF||0,0,.2));
  RW.spin.rotation.x=-o.wheel;FW.spin.rotation.x=-o.wheel;
  if(S.lastWheel!==undefined){const w=Math.abs(o.wheel-S.lastWheel)/dt;S.wspd+=(Math.min(w,80)-S.wspd)*(1-Math.exp(-4*dt));}S.lastWheel=o.wheel;
  const bo=cl((S.wspd-6)/22,0,1)*.5;BLUR_M.opacity=bo;RW.blur.visible=FW.blur.visible=bo>.02;
@@ -600,11 +706,11 @@ function updateBikePose(o){
  if(S.air&&!o.air)S.crouchV+=2.2;                 // landing: soak it up
  S.crouchV+=((tgt-S.crouch)*90-S.crouchV*13)*dt;S.crouch=cl(S.crouch+S.crouchV*dt,0,1.15);
  S.air=!!o.air;S.ext+=((o.air?1:0)-S.ext)*(1-Math.exp(-(o.air?3:8)*dt));
- S.lean+=(o.lean-S.lean)*(1-Math.exp(-7*dt));S.brake+=((o.brake||0)-S.brake)*(1-Math.exp(-5*dt));
+ S.lean+=(o.lean-S.lean)*(1-Math.exp(-7*dt));S.fore=(S.fore||0)+((o.fore||0)-(S.fore||0))*(1-Math.exp(-8*dt));S.brake+=((o.brake||0)-S.brake)*(1-Math.exp(-5*dt));
  const pitch=bike.rotation.x||0,roll=bike.rotation.z||0;
  const hpT=cl(.08+pitch*.8+.06*S.crouch,-.3,.9);S.headPitch+=(hpT-S.headPitch)*(1-Math.exp(-6*dt));
  const ln=S.lean;
- solve({crouch:Math.min(1,S.crouch)*(1-.55*S.ext),ext:S.ext,brake:S.brake,lean:ln*.33,shift:-ln*.05,crank:cv,steer:o.steer,headPitch:S.headPitch,headRoll:-roll*.65+ln*.33,
+ solve({ra:SUSP.ra,crouch:Math.min(1,S.crouch)*(1-.55*S.ext),ext:S.ext,brake:S.brake,fore:cl(S.fore,-1,1),lean:ln*.33,shift:-ln*.05,crank:cv,steer:o.steer,headPitch:S.headPitch,headRoll:-roll*.65+ln*.33,
   kneeOut:[Math.max(0,ln)*.6,Math.max(0,-ln)*.6]});
 }
 // Put the rider back on the bike after a crash (game.js detaches rider/bikeBody to tumble them).

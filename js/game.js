@@ -79,10 +79,10 @@ function styleGates(){gateMeshes.forEach((g,k)=>{const race=mode==='race';g.visi
 
 
 // ───────────────────────── game state
-const G=9.81,WB=1.3,SAG=.06;
+const G=9.81,WB=1.3,TRAVEL=.22,SAG=.07;   // 220 mm of travel each end, ~32 % sag
 // a bump under the front wheel now and under the rear a wheelbase later (ring buffer of physics steps at 120 Hz)
 function suspKick(f,r,v){P.sFV+=f;const n=Math.min(150,Math.round(WB/Math.max(v,2)*120));P.bq[(P.bi+n)%P.bq.length]+=r;}
-const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:.06,sR:.06,sFV:0,sRV:0,bq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
+const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:.07,sR:.07,bp:0,bpw:0,frontFree:false,airW:0,sFV:0,sRV:0,bq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
 const SW=[0,1,0,0];
 const input={steer:0,steerT:0,brake:0,btnBrake:0,lean:0,hop:false,hopHeld:false,hopT:0,hopCharge:0,brakeHeld:false,keyL:0,keyR:0};
 const DEV={fullAssist:false,log:null};
@@ -98,7 +98,7 @@ const crashBodies=[];const crumbs=[];let crumbT=0;
 // you come down onto. A deck edge between 15 cm and head height in front of you is something you hit.
 function surf(x,z){const g=heightAt(x,z),d=deckAt(x,z,P.y-(P.ground?.2:0));return d&&d.y>g?d.y:g;}
 function deckSide(x,z){const d=deckAt(x,z,P.y+1.4);return d&&d.y>P.y+.3&&d.y>heightAt(x,z)+.1?d:null;}
-function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.sF=P.sR=SAG;P.sFV=P.sRV=0;P.bq.fill(0);
+function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;P.sF=P.sR=SAG;P.sFV=P.sRV=0;P.bq.fill(0);
  reattachRider();crashBodies.length=0;setFirstPerson(view==='helmet');fp.yaw=P.th;}
 function startRun(m){if(m)mode=m;if(typeof tilt!=='undefined')tilt.cal=true;store.set('mode',mode);
  if(mode==='skinny'&&CORE.BALANCE.start){const b=CORE.BALANCE.start;placeRider(b.x,b.z,b.th);SK.sec=-1;SK.dabs=0;SK.offT=0;SK.onSec=-1;SK.done=false;}else placeRider(START.x,START.z-1,0);runT=0;gateIdx=0;splits=[];crashes=0;topSpd=0;airTotal=0;style=0;P.dist=0;crumbs.length=0;
@@ -257,10 +257,32 @@ function step(dt){
   // a ledge or bank face straight ahead: a fast hit is a crash, a slow one just stops you against it
   if(gF>1.1&&vf2>.5){if(state==='ride'&&vf2>7.5){crash('Hit a ledge');return;}vf2=0;vl2*=.5;shake=Math.max(shake,.4);}
   {const nxx=P.x+P.vx*dt*3,nzz=P.z+P.vz*dt*3,side=deckSide(nxx,nzz);if(side&&!(P.deck&&side.st===P.deck.st)){if(state==='ride'&&vf2>4.5){crash(side.y>P.y+1.1?'Clotheslined':'Hit the woodwork');return;}P.vx=P.vz=0;vf2=0;}}
-  const nx=P.x+P.vx*dt,nz=P.z+P.vz*dt,h1=surf(nx,nz),yb=P.y+P.vy*dt-.5*G*dt*dt;
-  if(h1<yb-.045&&vf2>2){P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=Math.atan2(P.vy,Math.hypot(P.vx,P.vz));P.x=nx;P.z=nz;P.y=yb;P.vy-=G*dt;}
-  else{const nvy=clamp((h1-P.y)/dt,-40,Math.max(4,vf2*1.2));{const dv=clamp((nvy-P.vy)*.3,-1.5,2.5);P.sFV+=dv;P.sRV+=dv;}P.vy=nvy;P.x=nx;P.z=nz;P.y=h1;}
-  if(input.hop&&live&&state!=='finish'){input.hop=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.pitch;P.vy=Math.max(P.vy,0)+2.9+2.7*input.hopCharge;fx('hop',input.hopCharge);P.sFV=P.sRV=-1.2;}
+  // The bike is a rigid body on two tyres a wheelbase apart, not a point on the ground. With both tyres down it sits
+  // on the chord between their contacts (bridging dips shorter than the wheelbase) at the pitch of that chord, and
+  // keeps the rotation rate the ground gives it. Where the ground falls away under the front tyre faster than the
+  // bike can follow (off a step, over the lip of a steep roll-in, cresting at speed) nothing holds the front up: it
+  // rotates nose-down about the rear contact under gravity, α = g·(d·cosθ − 0.25·sinθ)/(k²+d²+h²), with the mass
+  // d ≈ 0.66 m ahead of the rear axle (0.42 m with your weight right back) and h ≈ 1.05 m up — the rider stays
+  // upright over the cranks as the bike pitches, so the lever arm stays forward of the rear contact. The rear tyre carries
+  // it until the rear goes over the edge too, and then you're in the air with that rotation. So at walking pace the
+  // nose drops before the rear reaches the edge (a nose-dive); at speed you're past the edge first and fly off level.
+  const nx=P.x+P.vx*dt,nz=P.z+P.vz*dt,yb=P.y+P.vy*dt-.5*G*dt*dt;
+  const hR=surf(nx-F2.x*WB/2,nz-F2.z*WB/2),hFw=surf(nx+F2.x*WB/2,nz+F2.z*WB/2),gp=Math.atan2(hFw-hR,WB);
+  const placed=!(P.bp>-9);if(placed){P.bp=gp;P.bpw=0;}           // just placed: sit on the ground
+  if(gp>=P.bp-.002){                                              // the ground carries the front
+   const gpw=clamp((gp-P.bp)/dt,-3,3);
+   if(P.frontFree){const vImp=Math.max(0,gpw-P.bpw)*WB*Math.cos(gp);P.sFV+=Math.min(3.5,vImp*.8);
+    if(live&&vImp>1.2)fx('land',vImp/9);if(state==='ride'&&vImp>7.5){crash('Over the bars');return;}}
+   // the rotation the ground gives the bike, low-passed so the texture of the dirt doesn't turn into spin
+   P.bpw=P.frontFree?0:damp(P.bpw,clamp(gpw,-1.5,1.5),8,dt);P.bp=gp;P.frontFree=false;}
+  else{const d=clamp(.66+.24*fore,.42,.9),th=P.bp;           // the front is unsupported
+   P.bpw-=G*(d*Math.cos(th)-.25*Math.sin(th))/(.12+d*d+1.1)*dt;P.bp=clamp(Math.max(gp,P.bp+P.bpw*dt),-1.35,1.35);P.frontFree=gp<P.bp-.03;}
+  // the centre rides on the rear contact and the body's pitch; the frame can't sink more than 0.3 m into a crest
+  // (the contacts are sampled a wheelbase apart horizontally, so heights along the body go with tan of its pitch)
+  const yc=Math.max(hR+WB/2*Math.tan(P.bp),surf(nx,nz)-.3);
+  if(yc<yb-.045&&vf2>2){P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.bp;P.airW=clamp(P.bpw,-2,2);P.frontFree=false;P.x=nx;P.z=nz;P.y=yb;P.vy-=G*dt;}
+  else{const nvy=placed?0:clamp((yc-P.y)/dt,-40,Math.max(4,vf2*1.2));{const dv=clamp((nvy-P.vy)*.3,-1.5,2.5);P.sFV+=dv;P.sRV+=dv;}P.vy=nvy;P.x=nx;P.z=nz;P.y=yc;}
+  if(input.hop&&live&&state!=='finish'){input.hop=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.pitch;P.airW=0;P.frontFree=false;P.vy=Math.max(P.vy,0)+2.9+2.7*input.hopCharge;fx('hop',input.hopCharge);P.sFV=P.sRV=-1.2;}
   P.wheel+=vf2*dt/.39;if(P.pedal)P.crank+=dt*(5+vf2*.5);
  }else{
   P.deck=null;P.air+=dt;P.vy-=G*dt;P.vx*=1-.0025*dt*10;P.vz*=1-.0025*dt*10;
@@ -282,6 +304,8 @@ function step(dt){
   if(P.flipHold>.3||(P.flipW&&Math.abs(pc)>.75&&Math.sign(pc)===Math.sign(P.flipW)))P.flipW=damp(P.flipW||0,Math.sign(pc)*7.4,3,dt);
   else if(P.flipW)P.flipW=damp(P.flipW,0,4.5,dt);
   P.flip=(P.flip||0)+(P.flipW||0)*dt;
+  // the rotation the bike left the ground with carries on, the rider's arms soaking most of it up within ~0.3 s
+  if(P.airW){P.airPitch+=P.airW*dt;P.airW=damp(P.airW,0,3.2,dt);}
   P.x+=P.vx*dt;P.z+=P.vz*dt;P.y+=P.vy*dt;P.wheel+=Math.hypot(P.vx,P.vz)*dt/.39*.98;
   const h=surf(P.x,P.z);
   if(P.y<=h){const e=.5;const gx=(surf(P.x+e,P.z)-surf(P.x-e,P.z))/(2*e),gz=(surf(P.x,P.z+e)-surf(P.x,P.z-e))/(2*e);
@@ -293,7 +317,9 @@ function step(dt){
    if(live&&state==='ride'&&Math.abs(P.whip)>.8){crash('Sideways');return;}
    const Fh={x:-Math.sin(P.th),z:-Math.cos(P.th)};const slope=Math.atan(gx*Fh.x+gz*Fh.z),turns=Math.round((P.flip||0)/(Math.PI*2)),miss=P.airPitch+(P.flip||0)-turns*Math.PI*2-slope;
    if(live&&state==='ride'&&P.air>.35){if(miss<-.8){crash('Nosed in');return;}if(miss>1.0){crash('Looped out');return;}}
-   P.landMiss=miss;
+   P.landMiss=miss;P.bpw=0;P.frontFree=false;
+   // settle onto both tyres: the same two-contact height the ground model uses, so landing in a dip doesn't bounce
+   {const hRl=surf(P.x-Fh.x*WB/2,P.z-Fh.z*WB/2),hFl=surf(P.x+Fh.x*WB/2,P.z+Fh.z*WB/2);P.bp=Math.atan2(hFl-hRl,WB);P.y=Math.max(P.y,(hRl+hFl)/2);}
    P.vx-=vd*n.x;P.vy-=vd*n.y;P.vz-=vd*n.z;
    {const wF=clamp(.45-miss*.9,.15,.85),v0=vn*.32;P.sFV+=v0*wF*2;P.sRV+=v0*(1-wF)*2;}shake=Math.max(shake,Math.min(.8,vn*.05));if(live)camK.v-=Math.min(3.2,vn*.32);
    const air=P.air;if(air<=.3&&vn>2.5&&live)fx('land',vn/14);
@@ -309,16 +335,16 @@ function step(dt){
    P.air=0;}
  }
  // suspension spring
- // suspension: fork and shock as two springs in metres of travel (200 mm each end, 60 mm sag at rest), ~2 Hz and
+ // suspension: fork and shock as two springs in metres of travel (TRAVEL each end, SAG at rest), ~2 Hz and
  // under-damped like a coil DH bike, progressive into the last 40 mm. Loaded by g-force in corners and
  // compressions, by brake dive (front down, rear up), by pumping; unloaded in the air, where the wheels drop away.
  {const q=P.bq,ri=P.bi%q.length;P.sRV+=q[ri];q[ri]=0;P.bi++;
   let tF=0,tR=0;if(P.ground){const ac=Math.abs((P.om||0)*Math.hypot(P.vx,P.vz)),load=Math.min(2.2,Math.sqrt(1+(ac/G)**2)),bd=(P.bDec||0)/G,pu=P.pumping?.03:0;
    tF=SAG*load+bd*.05+pu;tR=SAG*load-bd*.03+pu;}
-  const spr=(s,v,t)=>-160*(s-t)-11*v-(s>.16?5000*(s-.16)**2:0);
+  const spr=(s,v,t)=>-160*(s-t)-11*v-(s>TRAVEL-.04?5000*(s-TRAVEL+.04)**2:0);
   P.sFV+=spr(P.sF,P.sFV,tF)*dt;P.sRV+=spr(P.sR,P.sRV,tR)*dt;P.sF+=P.sFV*dt;P.sR+=P.sRV*dt;
-  if(P.sF<0){P.sF=0;if(P.sFV<0)P.sFV=0;}if(P.sF>.2){P.sF=.2;if(P.sFV>0)P.sFV*=-.15;}
-  if(P.sR<0){P.sR=0;if(P.sRV<0)P.sRV=0;}if(P.sR>.2){P.sR=.2;if(P.sRV>0)P.sRV*=-.15;}
+  if(P.sF<0){P.sF=0;if(P.sFV<0)P.sFV=0;}if(P.sF>TRAVEL){P.sF=TRAVEL;if(P.sFV>0)P.sFV*=-.15;}
+  if(P.sR<0){P.sR=0;if(P.sRV<0)P.sRV=0;}if(P.sR>TRAVEL){P.sR=TRAVEL;if(P.sRV>0)P.sRV*=-.15;}
   P.susp=clamp(((P.sF+P.sR)/2-SAG)*2.2,-.12,.22);}
  // obstacles and bounds
  if(state==='ride'){let hit=null;nearColliders(P.x,P.z,o=>{if(hit)return;const dx=P.x-o.x,dz=P.z-o.z;if(dx*dx+dz*dz<(o.r+.25)**2&&P.y<(o.top!=null?o.top:heightAt(o.x,o.z)+(o.kind==='tree'?12:o.r*.7)))hit=o;});
@@ -339,13 +365,15 @@ function updateBikeVisual(dt){
  if(state==='crash')return;
  const F={x:-Math.sin(P.th),z:-Math.cos(P.th)};
  let y=P.y,pitchT;
- if(P.ground){const hf=surf(P.x+F.x*WB/2,P.z+F.z*WB/2),hr=surf(P.x-F.x*WB/2,P.z-F.z*WB/2);pitchT=Math.atan2(hf-hr,WB);y=(hf+hr)/2;P.pitch=damp(P.pitch,pitchT,20,dt);
+ if(P.ground){const hf=surf(P.x+F.x*WB/2,P.z+F.z*WB/2),hr=surf(P.x-F.x*WB/2,P.z-F.z*WB/2);
+  // the physics body's height and pitch (it rests on its two tyre contacts)
+  y=P.y;const bpv=P.bp>-9?P.bp:Math.atan2(hf-hr,WB);
   // at the braking limit the rear wheel lifts: pivot about the front contact
-  const st=(P.stoppie||0)*.16;P.pitch-=st;y+=WB/2*Math.sin(st);}
+  const st=(P.stoppie||0)*.16;P.pitch=bpv-st;y+=WB/2*Math.sin(st);}
  else{P.pitch=P.airPitch+(P.flip||0);}
  const rollT=P.ground?P.lean:-P.whip*.55;P.roll=P.ground?damp(P.roll,rollT,25,dt):damp(P.roll,rollT,5,dt);
  // the axles rise into the frame as the suspension works: front along the 63° steering axis, rear vertically
- const rF=0,rR=0;   // stable build: bike model without moving suspension yet
+ const rF=P.sF*.891,rR=P.sR;
  bike.position.set(P.x,y-(rF+rR)/2,P.z);
  bike.rotation.set(P.pitch+(rR-rF)/WB,P.th+(P.ground?0:P.whip),P.roll,'YXZ');
  const crouch=clamp(.25+P.susp*2.2+input.brake*.25+(P.ground?0:.15)+P.spd/50+(input.hopHeld?.4:0),0,1);
@@ -505,7 +533,7 @@ syncHap(store.get('hap')!==false);
 if(HAP.kind==='none'&&!/iP(hone|ad|od)/.test(navigator.userAgent))for(const id of['hap','hap2'])$(id).parentElement.hidden=true;
 HAP.armTapTick($('hop'));
 let paused=false;
-function togglePause(){if(state==='ride'||state==='countdown'||state==='crash'){paused=!paused;if(paused)HAP.stop();show(['pause'],paused);if(!paused)last=performance.now();}}
+function togglePause(){if(state==='ride'||state==='countdown'||state==='crash'){paused=!paused;if(paused)HAP.stop();else tilt.calT=.35;show(['pause'],paused);if(!paused)last=performance.now();}}
 $('pauseBtn').addEventListener('click',togglePause);$('resume').addEventListener('click',togglePause);
 $('restart').addEventListener('click',()=>{paused=false;show(['pause','crashmsg'],false);startRun();});
 $('toTop').addEventListener('click',()=>{paused=false;show(['pause','crashmsg'],false);startRun('free');});
@@ -528,7 +556,7 @@ function frame(now){requestAnimationFrame(frame);
  qT+=rdt;if(qT>2.5&&state!=='loading'){qT=0;const q=getQuality();if(ftAvg>24&&q>.55)setQuality(Math.max(.55,q*.85));else if(ftAvg<14.5&&q<1)setQuality(Math.min(1,q*1.1));}
  timeScale=damp(timeScale,1,state==='crash'?1.2:4,rdt);const dt=rdt*timeScale;
  // tilt: centre is wherever the phone is held during the countdown; leaning back brakes (on the ground)
- tilt.cal=tilt.on&&state!=='ride'&&state!=='crash'&&state!=='finish';input.lean=tilt.on&&state==='ride'?tilt.fwd:0;
+ tilt.calT=Math.max(0,(tilt.calT||0)-rdt);tilt.cal=tilt.on&&((state!=='ride'&&state!=='finish')||tilt.calT>0);input.lean=tilt.on&&state==='ride'?tilt.fwd:0;
  input.btnBrake=input.brakeHeld?Math.min(1,(input.btnBrake||0)+rdt*4):0;input.brake=Math.max(input.btnBrake,P.ground?clamp(-input.lean*1.15,0,1):0);
  input.steer=damp(input.steer,clamp((steerId!==null||!tilt.on?input.steerT:tilt.val)+(input.keyR-input.keyL)*.8,-1,1),SENS().d,rdt);
  if(state==='countdown'){cdT-=rdt;const n=Math.ceil(cdT-.2);const el=$('count');el.hidden=false;
