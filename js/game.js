@@ -79,10 +79,10 @@ function styleGates(){gateMeshes.forEach((g,k)=>{const race=mode==='race';g.visi
 
 
 // ───────────────────────── game state
-const G=9.81,WB=1.3,TRAVEL=.22,SAG=.07;   // 220 mm of travel each end, ~32 % sag
+const G=9.81,WB=1.3,TRAVEL=.22,SAG=.07,SAG_F=.044;   // 220 mm of travel each end; sag ~20 % fork, ~32 % shock (DH setup guides)
 // a bump under the front wheel now and under the rear a wheelbase later (ring buffer of physics steps at 120 Hz)
 function suspKick(f,r,v){P.sFV+=f;const n=Math.min(150,Math.round(WB/Math.max(v,2)*120));P.bq[(P.bi+n)%P.bq.length]+=r;}
-const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:.07,sR:.07,bp:0,bpw:0,frontFree:false,airW:0,sFV:0,sRV:0,bq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
+const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:.044,sR:.07,bp:0,bpw:0,frontFree:false,airW:0,sFV:0,sRV:0,bq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
 const SW=[0,1,0,0];
 const input={steer:0,steerT:0,brake:0,btnBrake:0,lean:0,hop:false,hopHeld:false,hopT:0,hopCharge:0,brakeHeld:false,keyL:0,keyR:0};
 const DEV={fullAssist:false,log:null};
@@ -98,7 +98,7 @@ const crashBodies=[];const crumbs=[];let crumbT=0;
 // you come down onto. A deck edge between 15 cm and head height in front of you is something you hit.
 function surf(x,z){const g=heightAt(x,z),d=deckAt(x,z,P.y-(P.ground?.2:0));return d&&d.y>g?d.y:g;}
 function deckSide(x,z){const d=deckAt(x,z,P.y+1.4);return d&&d.y>P.y+.3&&d.y>heightAt(x,z)+.1?d:null;}
-function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;P.sF=P.sR=SAG;P.sFV=P.sRV=0;P.bq.fill(0);
+function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;P.sF=SAG_F;P.sR=SAG;P.sFV=P.sRV=0;P.bq.fill(0);
  reattachRider();crashBodies.length=0;setFirstPerson(view==='helmet');fp.yaw=P.th;}
 function startRun(m){if(m)mode=m;if(typeof tilt!=='undefined')tilt.cal=true;store.set('mode',mode);
  if(mode==='skinny'&&CORE.BALANCE.start){const b=CORE.BALANCE.start;placeRider(b.x,b.z,b.th);SK.sec=-1;SK.dabs=0;SK.offT=0;SK.onSec=-1;SK.done=false;}else placeRider(START.x,START.z-1,0);runT=0;gateIdx=0;splits=[];crashes=0;topSpd=0;airTotal=0;style=0;P.dist=0;crumbs.length=0;
@@ -202,16 +202,19 @@ function step(dt){
   // the suspension working over roots and stones: small random kicks scaled by speed
   {const vv=Math.abs(P.vx*F.x+P.vz*F.z),kick=(Math.random()-.5)*feel.rough*Math.min(1,vv/12)*.75;suspKick(kick,kick,vv);}
   let vf=P.vx*F.x+P.vz*F.z,vl=P.vx*Rv.x+P.vz*Rv.z;
+  // vf is horizontal; the bike moves along the slope at vs = vf/cosθ. Forces act along the path, so integrate vs and
+  // turn it back into horizontal speed — otherwise steep ground would carry you sideways faster than gravity can.
+  const cA=1/Math.sqrt(1+gF*gF);let vs=vf/cA;
   // assist keeps open-slope speeds sane: a gentle brake above ~63 km/h
   // (earlier on steep ground, where the brakes can do less before you'd pitch over the bars)
-  P.autoBrake=0;{const vMax=17.5-6*clamp(-gF-.35,0,.5);if(assist&&state==='ride'&&!brake&&vf>vMax){brake=clamp((vf-vMax)/4,0,1);P.autoBrake=brake;}}
+  P.autoBrake=0;{const vMax=17.5-6*clamp(-gF-.35,0,.5);if(assist&&state==='ride'&&!brake&&vs>vMax){brake=clamp((vs-vMax)/4,0,1);P.autoBrake=brake;}}
   // rider + bike ≈ 100 kg, CdA ≈ 0.5 m² in the attack position → ½ρCdA/m ≈ 0.003
   const DRAG=.003,MASS=100;
-  let a=-G*gF/Math.sqrt(1+gF*gF)-feel.roll*Math.sign(vf)-DRAG*(1-.22*Math.max(0,input.lean))*vf*Math.abs(vf)-.045*feel.rough*vf;
+  let a=-G*gF*cA-feel.roll*cA*Math.sign(vs)-DRAG*(1-.22*Math.max(0,input.lean))*vs*Math.abs(vs)-.045*feel.rough*vs;
   // pedalling: ~750 W sprint, auto-pedals on flatter ground; DH gearing spins out above ~48 km/h
   const narrow=P.deck&&P.deck.w<.75;
-  if(mode==='skinny'&&state==='ride'&&!brake&&vf>(narrow?4.2:6)){brake=clamp((vf-(narrow?4.2:6))/2,0,.8);}
-  P.pedal=live&&state!=='finish'&&!brake&&vf<(mode==='skinny'?3.4:13.3)&&(gF>-.12||vf<6);if(P.pedal)a+=Math.min(2.6,750/(MASS*Math.max(vf,2)))*(1-smooth(11.5,13.3,vf));
+  if(mode==='skinny'&&state==='ride'&&!brake&&vs>(narrow?4.2:6)){brake=clamp((vs-(narrow?4.2:6))/2,0,.8);}
+  P.pedal=live&&state!=='finish'&&!brake&&vs<(mode==='skinny'?3.4:13.3)&&(gF>-.12||vs<6);if(P.pedal)a+=Math.min(2.6,750/(MASS*Math.max(vs,2)))*(1-smooth(11.5,13.3,vs));
   // brakes: both wheels together can use most of the tyres' grip (the rest is left for steering)
   // weight fore/aft: tilt (or, braking on the button, an instinctive shift back). It sets where your mass sits
   // over the wheels: back raises the braking limit on steep ground; forward weights the front tyre for corners.
@@ -221,14 +224,14 @@ function step(dt){
   // with x the mass's distance behind the front axle (≈0.62 m neutral, 0.9 m hips back, 0.34 m over the bars)
   // and h its height (≈1.05 m). On a 30° slope that limit is ~0.5 g neutral and ~0.8 g with your weight back.
   const cosA=1/Math.sqrt(1+gF*gF),tipLim=G*cosA*(.62-.28*fore)/(1.05-.1*Math.abs(fore));
-  const bRaw=brake*feel.grip*G*.92*Math.min(1,vf/1.2),bDecel=Math.min(bRaw,tipLim);if(brake)a-=bDecel;P.bDec=bDecel;
+  const bRaw=brake*feel.grip*G*.92*Math.min(1,vs/1.2),bDecel=Math.min(bRaw,tipLim);if(brake)a-=bDecel;P.bDec=bDecel;
   P.stoppie=damp(P.stoppie||0,clamp((bRaw-tipLim)/(.25*G),0,1),10,dt);
   // grabbing a fistful with your weight over the bars at speed: over you go
   if(state==='ride'&&bRaw-tipLim>.35*G&&vf>4&&fore>.3){crash('Over the bars');return;}
-  vf=Math.max(0,vf+a*dt);
+  vs=Math.max(0,vs+a*dt);vf=vs*cA;
   // steering: the thumb sets a lean angle; the lean (with its own inertia) carves the turn, ω = g·tanθ / v.
   // At walking pace the bars steer directly instead.
-  const v=vf,LEAN_MAX=.85,dmax=lerp(.55,.11,clamp(v/18,0,1));
+  const v=vs,LEAN_MAX=.85,dmax=lerp(.55,.11,clamp(v/18,0,1));
   let leanT=-steer*LEAN_MAX,delta=-steer*dmax;
   if(assist&&state==='ride'){const A=assistSteer(v,F,Rv);if(A.w){const w=A.w*(Math.abs(steer)>.08?(A.deck?.6:.3):1);
    leanT=lerp(leanT,clamp(Math.atan(A.om*v/G),-LEAN_MAX,LEAN_MAX),w);delta=lerp(delta,clamp(Math.atan(A.om*WB/Math.max(v,.5)),-dmax,dmax),w);}}
@@ -311,9 +314,11 @@ function step(dt){
   if(P.y<=h){const e=.5;const gx=(surf(P.x+e,P.z)-surf(P.x-e,P.z))/(2*e),gz=(surf(P.x,P.z+e)-surf(P.x,P.z-e))/(2*e);
    const n=V3(-gx,1,-gz).normalize();const vd=P.vx*n.x+P.vy*n.y+P.vz*n.z,vn=-vd;
    P.y=h;P.ground=true;
-   // a DH bike's ~200 mm of travel soaks up ~6 m/s into the ground easily; much past 10 m/s on a flat landing is a crash
-   if(live&&state==='ride'&&vn>(assist?12:10.5)){crash(P.air>.25?'Cased it':'Too hard');return;}
-   if(vn>7.5){const k=.75;P.vx*=k;P.vz*=k;shake=1;fx('bottom');if(state==='ride')pop('Bottomed out','bad');}
+   // speed into the ground: 8.5 m/s is a 3.7 m drop to flat (the trials world record to flat is 4.1–5.15 m); past it
+   // you crash. A 220 mm DH bike bottoms out from ~6 m/s (a 1.8 m drop to flat). Landing on a transition is gentle:
+   // only the speed INTO the slope counts.
+   if(live&&state==='ride'&&vn>(assist?10:8.5)){crash(P.air>.25?'Cased it':'Too hard');return;}
+   if(vn>6){const k=.75;P.vx*=k;P.vz*=k;shake=1;fx('bottom');if(state==='ride')pop('Bottomed out','bad');}
    if(live&&state==='ride'&&Math.abs(P.whip)>.8){crash('Sideways');return;}
    const Fh={x:-Math.sin(P.th),z:-Math.cos(P.th)};const slope=Math.atan(gx*Fh.x+gz*Fh.z),turns=Math.round((P.flip||0)/(Math.PI*2)),miss=P.airPitch+(P.flip||0)-turns*Math.PI*2-slope;
    if(live&&state==='ride'&&P.air>.35){if(miss<-.8){crash('Nosed in');return;}if(miss>1.0){crash('Looped out');return;}}
@@ -340,9 +345,10 @@ function step(dt){
  // compressions, by brake dive (front down, rear up), by pumping; unloaded in the air, where the wheels drop away.
  {const q=P.bq,ri=P.bi%q.length;P.sRV+=q[ri];q[ri]=0;P.bi++;
   let tF=0,tR=0;if(P.ground){const ac=Math.abs((P.om||0)*Math.hypot(P.vx,P.vz)),load=Math.min(2.2,Math.sqrt(1+(ac/G)**2)),bd=(P.bDec||0)/G,pu=P.pumping?.03:0;
-   tF=SAG*load+bd*.05+pu;tR=SAG*load-bd*.03+pu;}
-  const spr=(s,v,t)=>-160*(s-t)-11*v-(s>TRAVEL-.04?5000*(s-TRAVEL+.04)**2:0);
-  P.sFV+=spr(P.sF,P.sFV,tF)*dt;P.sRV+=spr(P.sR,P.sRV,tR)*dt;P.sF+=P.sFV*dt;P.sR+=P.sRV*dt;
+   tF=SAG_F*load+bd*.05+pu;tR=SAG*load-bd*.03+pu;}
+  // k = g/sag per unit mass (a linear coil carrying the rider's weight at sag): fork 223 (2.4 Hz), shock 140 (1.9 Hz)
+  const spr=(s,v,t,k)=>-k*(s-t)-.7*Math.sqrt(k)*v-(s>TRAVEL-.04?5000*(s-TRAVEL+.04)**2:0);
+  P.sFV+=spr(P.sF,P.sFV,tF,G/SAG_F)*dt;P.sRV+=spr(P.sR,P.sRV,tR,G/SAG)*dt;P.sF+=P.sFV*dt;P.sR+=P.sRV*dt;
   if(P.sF<0){P.sF=0;if(P.sFV<0)P.sFV=0;}if(P.sF>TRAVEL){P.sF=TRAVEL;if(P.sFV>0)P.sFV*=-.15;}
   if(P.sR<0){P.sR=0;if(P.sRV<0)P.sRV=0;}if(P.sR>TRAVEL){P.sR=TRAVEL;if(P.sRV>0)P.sRV*=-.15;}
   P.susp=clamp(((P.sF+P.sR)/2-SAG)*2.2,-.12,.22);}

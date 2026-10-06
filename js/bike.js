@@ -30,7 +30,7 @@ const M={
  tyre:new THREE.MeshStandardMaterial({map:TX.tyre,roughness:.92}),
  rotor:new THREE.MeshStandardMaterial({map:TX.rotor,alphaTest:.5,metalness:.95,roughness:.3,side:THREE.DoubleSide}),
  chain:new THREE.MeshStandardMaterial({map:TX.chain,metalness:.85,roughness:.38}),
- spring:phys({color:0xf2ece0,roughness:.3,metalness:.05,clearcoat:.8,clearcoatRoughness:.12}),
+ spring:phys({color:0xffc414,roughness:.28,metalness:.05,clearcoat:.8,clearcoatRoughness:.12}),
  body:new THREE.MeshStandardMaterial({map:TX.rider,roughness:.8}),
  helmet:phys({map:TX.helmet,roughness:.32,clearcoat:1,clearcoatRoughness:.06,side:THREE.DoubleSide}),
  lens:phys({color:0x2a2018,metalness:1,roughness:.05,iridescence:1,iridescenceIOR:1.75,iridescenceThicknessRange:[260,720]}),
@@ -149,9 +149,9 @@ const bike=new THREE.Group();bike.name='bike';scene.add(bike);
 const bikeBody=new THREE.Group();bike.add(bikeBody);
 const RA=V3(0,.39,.63),FA=V3(0,.39,-.67),BB=V3(0,.36,.10),WR=.39;
 const HD=V3(0,.891,.454).normalize(),FWD=V3(0,HD.z,-HD.y);            // steering axis (63.0° head angle) and its forward normal
-// FR lifts the head tube, crowns and cockpit along the steering axis so the fork has room for 200 mm of travel
-// (tyre top to lower-crown underside ≥ 0.205 m along the legs)
-const FR=.065;
+// FR lifts the head tube, crowns and cockpit along the steering axis so the fork has room for 220 mm of travel
+// (tyre top to the lower crown's bridge ≥ 0.226 m along the legs); TRAVEL is the stroke at both ends
+const FR=.082,TRAVEL=.22;
 const HTB=FA.clone().addScaledVector(FWD,-.05);HTB.addScaledVector(HD,(.89+FR*HD.y-HTB.y)/HD.y);   // 50 mm fork offset
 const axisPt=t=>HTB.clone().addScaledVector(HD,t);
 const legPt=(t,sx=0)=>FA.clone().addScaledVector(HD,t).setX(sx);       // fork leg line, t = distance from the axle
@@ -165,7 +165,8 @@ const F=new Kit(fb('frame'));   // frame + rear end + shock + drivetrain, one sk
 // ── front triangle
 F.add(M.paint,sweep(line(axisPt(-.008),axisPt(.135)),{n:6,seg:28,uv:UVF.ht,prof:t=>{const r=mix(.0355,.031,t)+.003*(sstep(.12,0,t)+sstep(.88,1,t));return{rx:r,ry:r};}}));
 for(const t of[-.016,.143])rod(F,M.black,axisPt(t-.009),axisPt(t+.009),.037,.037,24);
-const DT=CR([axisPt(.04),V3(0,.77,-.222).addScaledVector(HD,FR*.55),V3(0,.585,-.058).addScaledVector(HD,FR*.18),V3(0,.45,.045),BB.clone().add(V3(0,.01,.005))]);
+const DT=CR([axisPt(.04),V3(0,.776,-.21).addScaledVector(HD,FR*.55),   // bowed back: front tyre clearance at full travel
+V3(0,.585,-.058).addScaledVector(HD,FR*.18),V3(0,.45,.045),BB.clone().add(V3(0,.01,.005))]);
 F.add(M.paint,sweep(DT,{n:30,seg:24,uv:UVF.dt,prof:t=>({rx:mix(.03,.036,t),ry:mix(.044,.036,sstep(0,.45,t))+.012*sstep(.6,1,t),p:2.6})}));
 F.add(M.rubber,sweep(DT,{n:12,seg:8,arc:[-.2,.2],prof:t=>({rx:.039,ry:.051,p:2.6})}),null).applyMatrix4(new THREE.Matrix4());
 // down-tube guard only on the lower half (rebuilt for a sub-range)
@@ -185,40 +186,49 @@ for(const s of[-1,1])xcyl(F,M.black,BB.clone().setX(s*.05),.021,.012,20);
 // ── suspension: shock mounts, coil shock, rocker
 // Rear end = four-bar: frame, swingarm (chainstays, MP→RA), seat stays (pivot concentric with the axle, RA→SSP),
 // rocker (about PIV, carrying the seat-stay eye SSP and the shock's upper eye SU). Points chosen for a DH curve:
-// leverage 2.8 at top-out easing to 2.6, 75 mm of shock stroke for 200 mm of wheel travel, 42° of rocker swing; the
-// seat-stay eye stays behind the seat tube and the rocker plates sit outboard of the tyre all the way through.
+// leverage 2.8 at top-out easing to 2.6 and rising to 2.7 at the end, 82 mm of shock stroke for 220 mm of wheel
+// travel, 47° of rocker swing; the seat-stay eye stays behind the seat tube and the rocker plates sit outboard of
+// the tyre all the way through.
 const SL=V3(0,.60,-.09),SU=V3(0,.77,.16),PIV=stAt(.67),SSP=V3(0,.73,.40),MP=V3(0,.465,.17);
 const SHK={L0:SU.distanceTo(SL)};   // shock eye-to-eye at top-out
 F.add(M.paint,plateYZ(hullCircles([[SL.z,SL.y,.017],[-.125,.555,.02],[-.04,.53,.02]]),0,.034,.004),null,PT.orange);
 xcyl(F,M.alloy,SL,.0055,.046,8);
 {const sd=SU.clone().sub(SL),sl=sd.length();sd.normalize();const Sp=f=>SL.clone().addScaledVector(sd,f);const up=V3().crossVectors(sd,X).normalize();
+ // big-hit coil shock: 10.6 mm wire on a 71 mm coil (82 mm outside), fat body, a short fat piggyback reservoir
+ // above the preload collar. The lower eye sits in a down-tube lug; a long shaft eyelet carries the spring seat 66 mm
+ // up the shaft so the coil clears the down tube, and the stack leaves the coil 4 mm short of binding at 82 mm.
  // shaft side, rotating about the lower eye
  F.bone=fb('shock');
- xcyl(F,M.black,SL,.013,.036,16);
- rod(F,M.black,Sp(0),Sp(.028),.012,.012,12);
- rod(F,M.alloy,Sp(.02),Sp(.13),.0068,.0068,12);
- rod(F,M.black,Sp(.024),Sp(.031),.032,.032,24);                         // lower spring seat
- rod(F,M.rubber,Sp(.096),Sp(.112),.012,.0168,14);                         // bottom-out bumper
+ xcyl(F,M.black,SL,.016,.04,18);
+ rod(F,M.black,Sp(0),Sp(.068),.016,.016,16);                             // shaft eyelet
+ rod(F,M.alloy,Sp(.06),Sp(.176),.0085,.0085,14);                          // shaft
+ rod(F,M.black,Sp(.066),Sp(.076),.044,.044,28);                           // lower spring seat
+ rod(F,M.black,Sp(.066),Sp(.069),.046,.046,28);
+ rod(F,M.rubber,Sp(.146),Sp(.162),.015,.02,16);                           // bottom-out bumper
  // body side: slides down the shaft by the stroke
  F.bone=fb('shockBody');
- xcyl(F,M.black,SU,.012,.03,16);
- rod(F,M.black,Sp(.112),Sp(sl-.012),.0178,.0178,18);                      // damper body
- rod(F,M.black,Sp(.112),Sp(.118),.0186,.0186,18);                         // seal head
- rod(F,M.accent,Sp(sl-.074),Sp(sl-.06),.0325,.0325,24);                   // preload collar
- rod(F,M.black,Sp(sl-.03).addScaledVector(up,.036),Sp(sl-.11).addScaledVector(up,.036),.0135,.0135,16);  // piggyback
- rod(F,M.gold,Sp(sl-.11).addScaledVector(up,.036),Sp(sl-.116).addScaledVector(up,.036),.0137,.0137,16);
- rod(F,M.black,Sp(sl-.028),Sp(sl-.028).addScaledVector(up,.036),.009,.009,10);
- rod(F,M.accent,Sp(sl-.02).addScaledVector(up,.02).add(V3(.016,0,0)),Sp(sl-.02).addScaledVector(up,.02).add(V3(.026,0,0)),.006,.006,10);  // rebound knob
+ xcyl(F,M.black,SU,.015,.04,18);
+ rod(F,M.black,Sp(.162),Sp(sl-.012),.0225,.0225,22);                      // damper body
+ rod(F,M.alloy,Sp(.162),Sp(.17),.0238,.0238,22);                          // seal head
+ rod(F,M.black,Sp(sl-.03),Sp(sl-.012),.026,.026,22);                      // eyelet head
+ rod(F,M.accent,Sp(sl-.067),Sp(sl-.052),.045,.045,28);                    // preload collar
+ rod(F,M.black,Sp(sl-.064),Sp(sl-.055),.0465,.0465,28);
+ const RO=.056;
+ rod(F,M.black,Sp(sl-.008).addScaledVector(up,RO),Sp(sl-.046).addScaledVector(up,RO),.022,.022,22);   // piggyback reservoir
+ rod(F,M.gold,Sp(sl-.046).addScaledVector(up,RO),Sp(sl-.05).addScaledVector(up,RO),.0223,.0223,22);
+ rod(F,M.black,Sp(sl-.024),Sp(sl-.024).addScaledVector(up,RO),.013,.013,12);                          // reservoir bridge
+ rod(F,M.accent,Sp(sl-.02).addScaledVector(up,.028).add(V3(.022,0,0)),Sp(sl-.02).addScaledVector(up,.028).add(V3(.034,0,0)),.008,.008,12);  // rebound knob
+ rod(F,M.accent,Sp(sl-.026).addScaledVector(up,RO+.022),Sp(sl-.026).addScaledVector(up,RO+.034),.009,.009,12);    // compression knob
  // coil: each turn blended between the two ends, so it compresses evenly and the wire stays round
- const coils=7.5,a0=.033,a1=sl-.077,Rs=.0285,n=Math.round(coils*22);
- F.add(M.spring,skinT(sweep(t=>{const th=t*coils*TAU;return Sp(mix(a0,a1,t)).addScaledVector(X,Math.cos(th)*Rs).addScaledVector(up,Math.sin(th)*Rs);},{n,seg:7,ref:null,prof:()=>({rx:.0042})}),n,7,t=>[fb('shock'),fb('shockBody'),t]));}
+ const coils=6,a0=.08,a1=sl-.07,Rs=.0355,n=Math.round(coils*24);
+ F.add(M.spring,skinT(sweep(t=>{const th=t*coils*TAU;return Sp(mix(a0,a1,t)).addScaledVector(X,Math.cos(th)*Rs).addScaledVector(up,Math.sin(th)*Rs);},{n,seg:9,ref:null,prof:()=>({rx:.0053})}),n,9,t=>[fb('shock'),fb('shockBody'),t]));}
 // rocker: a plate either side, outboard of the tyre (its rear arm passes within 2 cm of the tread at full travel);
 // two arms from the pivot (shock eye forward, seat-stay eye rearward), spacers on the shock and pivot bolts
 F.bone=fb('rocker');
 {const RX=.05,mid=PIV.clone().lerp(SSP,.5).addScaledVector(V3(0,SSP.z-PIV.z,-(SSP.y-PIV.y)).normalize(),.01);
  for(const s of[-1,1]){F.add(M.black,plateYZ(hullCircles([[PIV.z,PIV.y,.024],[SU.z,SU.y,.019]]),s*RX,.009,.002));
   F.add(M.black,plateYZ(hullCircles([[PIV.z,PIV.y,.024],[mid.z,mid.y,.018],[SSP.z,SSP.y,.019]]),s*RX,.009,.002));
-  rod(F,M.alloy,SU.clone().setX(s*.015),SU.clone().setX(s*(RX-.004)),.009,.009,12);
+  rod(F,M.alloy,SU.clone().setX(s*.02),SU.clone().setX(s*(RX-.004)),.009,.009,12);
   rod(F,M.alloy,PIV.clone().setX(s*.025),PIV.clone().setX(s*(RX-.004)),.011,.011,12);}
  xcyl(F,M.alloy,SU,.0055,2*RX+.022,8);
  xcyl(F,M.alloy,PIV,.0068,2*RX+.02,10);for(const s of[-1,1])xcyl(F,M.black,PIV.clone().setX(s*(RX+.008)),.0105,.006,12);}
@@ -334,8 +344,8 @@ function makeWheel(front){
  K.add(M.black,latheX([[.009,-.079],[.017,-.077],[.018,-.064],[.031,-hw-.004],[.032,-hw+.002],[.019,-hw+.006],[.016,-.02],[.019,0],[.016,.02],[.019,hw-.006],[.032,hw-.002],[.031,hw+.004],[.018,.064],[.017,.077],[.009,.079]],22));
  for(let i=0;i<32;i++){const s=i%2?1:-1,ar=i/32*TAU,ah=ar+((i>>1)%2?1:-1)*1.05;
   rod(K,M.black,V3(s*hw,Math.cos(ah)*.029,Math.sin(ah)*.029),V3(s*.005,Math.cos(ar)*.298,Math.sin(ar)*.298),.0011,.0011,4);}
- const rt=new THREE.CircleGeometry(.1,48);rt.rotateY(Math.PI/2);rt.translate(front?-.058:-.062,0,0);K.add(M.rotor,rt);
- for(let i=0;i<6;i++){const a=i/6*TAU;xcyl(K,M.black,V3(front?-.061:-.065,Math.cos(a)*.034,Math.sin(a)*.034),.0042,.008,6);}
+ const rt=new THREE.CircleGeometry(.1,48);rt.rotateY(Math.PI/2);rt.translate(front?-.054:-.062,0,0);K.add(M.rotor,rt);
+ for(let i=0;i<6;i++){const a=i/6*TAU;xcyl(K,M.black,V3(front?-.057:-.065,Math.cos(a)*.034,Math.sin(a)*.034),.0042,.008,6);}
  if(!front){const tt=[24,21,19,17,15,13,11];tt.forEach((n,i)=>{const r=n*.0127/TAU+.002;xcyl(K,M.alloy,V3(.031+i*.0042,0,0),r,.0019,28);});}
  K.build(spin);
  const blur=new THREE.Mesh(BLUR_G,BLUR_M);blur.renderOrder=2;blur.visible=false;outer.add(blur);
@@ -348,29 +358,38 @@ const fork=new THREE.Group();fork.position.copy(HTB);bikeBody.add(fork);
 // the legs by the fork stroke (front wheel, axle, arch, caliper ride on them)
 const FKB=['forkUpper','forkLowers'].map((n,i)=>{const b=new THREE.Bone();b.name=n;b.userData.i=i;fork.add(b);return b;});
 const FK=new Kit(0);
-// lower / upper crown and top of the lowers (seal), distance from the axle along the legs: 213 mm of stanchion shows
-// above the seals and the tyre clears the lower crown by 206 mm at top-out
-const TLC=.545+FR,TUC=.7015+FR,LW=.30+FR;
-for(const s of[-1,1]){const sx=s*.07;
+// A big-hit DH fork, drawn ~15% over a real 40 mm fork so it reads at chase-cam distance (47 mm stanchions, legs
+// 180 mm apart). Distances from the axle along the legs:
+// LCB = underside of the lower crown's bridge (it sits right under the head-tube cup; the tyre clears it by 6 mm at
+// full travel), the clamp bosses hang 26 mm lower; LW = top of the lowers (seal), 230 mm of stanchion showing.
+const LX=.09,RS=.0235,LCB=.5316+FR,TUC=.7015+FR,LW=.26+FR;
+for(const s of[-1,1]){const sx=s*LX;
  FK.bone=1;
- FK.add(M.paint,sweep(line(legPt(-.028,sx),legPt(LW,sx)),{n:10,seg:20,uv:UVF.low,caps:[true,false],prof:t=>{const r=mix(.0262,.0288,t)+.002*sstep(.93,1,t);return{rx:r,ry:r*1.04,capBulge:.008};}}));
- rod(FK,M.rubber,legPt(LW-.004,sx),legPt(LW+.015,sx),.0245,.0215,20);
- xcyl(FK,M.black,legPt(0,sx),.019,.032,16);
+ FK.add(M.paint,sweep(line(legPt(-.03,sx),legPt(LW,sx)),{n:12,seg:22,uv:UVF.low,caps:[true,false],prof:t=>{const r=mix(.032,.035,t)+.003*sstep(.86,1,t);return{rx:r,ry:r*1.05,capBulge:.01};}}));
+ rod(FK,M.rubber,legPt(LW-.004,sx),legPt(LW+.016,sx),.037,.0305,22);                                  // seal / wiper
+ xcyl(FK,M.black,legPt(0,sx),.028,.05,18);                                                           // axle boss
+ // guard on the front of each lower leg
+ FK.add(M.rubber,sweep(line(legPt(.06,sx),legPt(.25,sx)),{n:4,seg:12,ref:X,caps:[true,true],prof:t=>({rx:.024-.004*t,ry:.004,p:4,ox:s*.007,oy:.0385})}));
  FK.bone=0;
- rod(FK,M.gold,legPt(LW-.05,sx),legPt(TUC+.035,sx),.0192,.0192,22);
- rod(FK,M.black,legPt(TUC+.035,sx),legPt(TUC+.047,sx),.0198,.0198,20);
- rod(FK,s>0?M.accent:M.gold,legPt(TUC+.047,sx),legPt(TUC+.058,sx),.009,.009,12);
+ rod(FK,M.gold,legPt(LW-.05,sx),legPt(TUC+.035,sx),RS,RS,24);
+ rod(FK,M.black,legPt(TUC+.035,sx),legPt(TUC+.048,sx),RS+.001,RS+.001,22);
+ rod(FK,s>0?M.accent:M.gold,legPt(TUC+.048,sx),legPt(TUC+.06,sx),.01,.01,12);
 }
 FK.bone=1;
-xcyl(FK,M.alloy,FA,.0088,.19,12);rod(FK,M.black,FA.clone().setX(.096),FA.clone().add(V3(.1,-.0,.055)),.005,.004,6);
-// arch: clear of the tyre, and far enough forward to pass in front of the lower crown at full travel
-FK.add(M.paint,sweep(CR([legPt(.22,-.07).addScaledVector(FWD,.024),legPt(.32,-.058).addScaledVector(FWD,.05),legPt(.41,0).addScaledVector(FWD,.078),legPt(.32,.058).addScaledVector(FWD,.05),legPt(.22,.07).addScaledVector(FWD,.024)]),{n:24,seg:12,ref:null,prof:t=>({rx:.0125,ry:.017,p:2.6})}),null,PT.gloss);
+xcyl(FK,M.alloy,FA,.0115,.238,14);rod(FK,M.black,FA.clone().setX(.119),FA.clone().add(V3(.123,0,.06)),.0065,.005,8);
+for(const f of[-.013,.013])xcyl(FK,M.alloy,legPt(-.012,LX+.025).addScaledVector(FWD,f),.0055,.008,8);   // axle pinch bolts
+// arch: deep-section, bulging forward, clear of the tyre, and far enough forward to pass in front of the lower crown
+FK.add(M.paint,sweep(CR([legPt(.2,-LX).addScaledVector(FWD,.026),legPt(.31,-.068).addScaledVector(FWD,.056),legPt(.42,0).addScaledVector(FWD,.084),legPt(.31,.068).addScaledVector(FWD,.056),legPt(.2,LX).addScaledVector(FWD,.026)]),{n:28,seg:14,ref:null,prof:t=>({rx:.016,ry:.026,p:2.6})}),null,PT.gloss);
 FK.bone=0;
-// crowns (extruded outlines in the plane normal to the steering axis)
-for(const [t,th] of [[TLC,.034],[TUC,.026]]){const sh=hullCircles([[-.07,0,.031],[.07,0,.031],[0,-.05,.031],[-.035,.006,.03],[.035,.006,.03]],16);
+// crowns: a bridge (extruded outline in the plane normal to the steering axis) and a tall clamp boss round each
+// stanchion with two pinch bolts across its front slot
+for(const[b0,th,bl,bh]of[[LCB,.03,.026,0],[TUC-.013,.026,.009,.007]]){
+ const sh=hullCircles([[-LX,0,.044],[LX,0,.044],[0,-.05,.036],[-.048,.012,.036],[.048,.012,.036]],16);
  const g=new THREE.ExtrudeGeometry(shapeOf(sh),{depth:th-.006,bevelEnabled:true,bevelThickness:.003,bevelSize:.003,bevelSegments:2,curveSegments:8});
- g.applyMatrix4(basisAt(legPt(t,0).addScaledVector(HD,-th/2+.003),X,FWD,HD));FK.add(M.black,g);
- for(const s of[-1,1])xcyl(FK,M.alloy,legPt(t,s*.07).addScaledVector(FWD,.034).addScaledVector(HD,0),.0045,.03,8);}
+ g.applyMatrix4(basisAt(legPt(b0+.003,0),X,FWD,HD));FK.add(M.black,g);
+ for(const s of[-1,1]){const sx=s*LX,lo=b0-bl,hi=b0+th+bh;
+  rod(FK,M.black,legPt(lo,sx),legPt(hi,sx),RS+.015,RS+.015,26);
+  for(const f of[.3,.72])xcyl(FK,M.alloy,legPt(mix(lo,hi,f),sx).addScaledVector(FWD,RS+.017),.0068,.036,8);}}
 rod(FK,M.black,axisPt(.13),axisPt(.165),.018,.018,16);
 // direct-mount stem + bar
 const BC=legPt(.745+FR,0).addScaledVector(FWD,.006);
@@ -406,13 +425,12 @@ for(const s of[-1,1])FK.add(M.rubber,sweep(t=>barAt(s*(.4+t*.008)),{n:1,seg:14,r
  const gb=new THREE.PlaneGeometry(w,h,10,1);const pb=gb.attributes.position;for(let i=0;i<pb.count;i++){const x=pb.getX(i);pb.setZ(i,-8*x*x*.12+.001);}
  gb.computeVertexNormals();gb.rotateX(-.2);gb.translate(c.x,c.y,c.z);FK.add(M.paint,gb,null,PT.paper);
  for(const s of[-1,1])rod(FK,M.black,c.clone().add(V3(s*.06,-.04,.01)),barAt(s*.06).add(V3(0,0,-.005)),.003,.003,5);}
-const FCAL=[-.058];
 // front brake hose: a loop in front of the crowns takes up the stroke (blended from the upper assembly to the lowers)
-hose(FK,[barAt(-.2).add(V3(0,.008,-.03)),barAt(-.16).add(V3(-.01,-.03,-.11)),legPt(TUC-.04,-.112).addScaledVector(FWD,.045),legPt(TLC-.06,-.118).addScaledVector(FWD,.06),legPt(LW-.02,-.112).addScaledVector(FWD,.04),legPt(.2,-.1).addScaledVector(FWD,-.02),legPt(.1,-.092).addScaledVector(FWD,-.04)],.0027,M.rubber,
+hose(FK,[barAt(-.2).add(V3(0,.008,-.03)),barAt(-.16).add(V3(-.01,-.03,-.11)),legPt(TUC-.04,-.134).addScaledVector(FWD,.048),legPt(LCB-.045,-.142).addScaledVector(FWD,.062),legPt(LW-.02,-.137).addScaledVector(FWD,.042),legPt(.2,-.13).addScaledVector(FWD,-.022),legPt(.1,-.122).addScaledVector(FWD,-.042)],.0027,M.rubber,
  t=>along(t,[[3/6,5/6]],[0,1]));
 hose(FK,[barAt(.2).add(V3(0,.008,-.03)),barAt(.15).add(V3(.02,-.06,-.12)),axisPt(.05).add(V3(.04,-.02,-.07)),axisPt(.06).add(V3(.03,0,.02))]);
 hose(FK,[barAt(.185).add(V3(.01,-.02,-.01)),barAt(.13).add(V3(.03,-.08,-.1)),axisPt(.04).add(V3(.045,-.02,-.05)),axisPt(.06).add(V3(.03,0,.02))],.0025,M.black);
-FK.bone=1;caliper(FK,FA,null,-1.25,-.058,legPt(.05,-.075).addScaledVector(FWD,-.02));
+FK.bone=1;caliper(FK,FA,null,-1.25,-.054,legPt(.05,-.085).addScaledVector(FWD,-.02));
 FW.outer.position.copy(FA).sub(HTB);fork.add(FW.outer);
 FK.build(fork,{off:HTB,skel:skeletonOf(FKB)});
 function frontSuspension(sF){SUSP.sF=sF;FKB[1].position.copy(HD).multiplyScalar(sF);FW.outer.position.copy(FA).sub(HTB).addScaledVector(HD,sF);}
@@ -688,7 +706,7 @@ function rearSuspension(sR){
 function updateBikePose(o){
  const dt=Math.min(o.dt||.016,.05),S=ST8;
  fork.quaternion.setFromAxisAngle(HD,o.steer);
- rearSuspension(cl(o.sR||0,0,.2));frontSuspension(cl(o.sF||0,0,.2));
+ rearSuspension(cl(o.sR||0,0,TRAVEL));frontSuspension(cl(o.sF||0,0,TRAVEL));
  RW.spin.rotation.x=-o.wheel;FW.spin.rotation.x=-o.wheel;
  if(S.lastWheel!==undefined){const w=Math.abs(o.wheel-S.lastWheel)/dt;S.wspd+=(Math.min(w,80)-S.wspd)*(1-Math.exp(-4*dt));}S.lastWheel=o.wheel;
  const bo=cl((S.wspd-6)/22,0,1)*.5;BLUR_M.opacity=bo;RW.blur.visible=FW.blur.visible=bo>.02;
