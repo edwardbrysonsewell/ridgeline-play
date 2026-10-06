@@ -320,6 +320,7 @@ const STYLE = {
   shoreline: { wet: 1, moss: 1, plankW: [5, 4, 4, 5, 6, 5, 1, 1, 4, 4, 4, 4, 1, 3, 3], lumberW: [4, 1, 4, 2] },
   ridgeline: { wet: .45, moss: .45, plankW: [6, 6, 5, 6, 2, 2, 2, 2, 2, 2, .5, .5, 1, 1, 1], lumberW: [5, 2, 1, 4] },
   widowmaker: { wet: .3, moss: .25, plankW: [6, 7, 5, 7, 1, 1, 2, 2, 3, 3, .2, .2, 1, .5, .5], lumberW: [5, 2, .5, 5] },
+  razorback: { wet: .15, moss: .05, plankW: [6, 7, 5, 7, 1, 1, 2, 2, 3, 3, .2, .2, 1, .5, .5], lumberW: [5, 2, .5, 5] },   // sun-bleached, dry
 };
 const pick = (w, r) => { let t = 0; for (const x of w) t += x; let q = r() * t; for (let i = 0; i < w.length; i++) { q -= w[i]; if (q <= 0) return i; } return w.length - 1; };
 

@@ -16,6 +16,11 @@
 //   3 Desert     red/orange/cream sandstone with strata and desert varnish · crumbly red dirt · sandy washes · dry grass
 //   2 Shoreline  everything wet: dark glossy singletrack with roots and puddles · moss & fern rainforest floor ·
 //                mossy rock
+//   5 Highland   (Hollowfell) dark, wet loam singletrack with roots · tawny moor grass and heather up top · moss and
+//                needle duff under the conifers · dark wet rock with moss on its tops
+//   4 Alpine     (Razorback) brown alpine loam with roots on the forest trails · tundra turf up high, greener below · pale
+//                jointed granite on the faces (black water streaks, lichen) · scree fans under cliffs · snow lying in
+//                shaded hollows, couloirs and ledges, thinning below a snowline
 // Textures (tools/terrain_gen.py): array layers 0 dirt · 1 grass · 2 forest · 3 rock · 4 scree · 5 moss
 //   tAlb 1024² sRGB albedo (<layer>_a.jpg) · tNrm 512² RG normal XY + B height (<layer>_n.jpg) · tNoise 256² RGBA fbm
 import * as THREE from 'three';
@@ -55,7 +60,7 @@ export const terrainReady=(async()=>{
 })();
 
 // ════════════════════════════════════════════════════════════════════════════ material
-const MTN_ID={ridgeline:0,widowmaker:1,shoreline:2,desert:3};
+const MTN_ID={ridgeline:0,widowmaker:1,shoreline:2,desert:3,alpine:4,highland:5};
 const biomeOf=()=>MTN_ID[MOUNTAIN.biome||MOUNTAIN.id]||0;
 const terrainMat=new THREE.MeshStandardMaterial({roughness:.95,metalness:0});
 terrainMat.defines={TERRAIN_HQ:isMobile?0:1,MTN:biomeOf()};
@@ -118,7 +123,11 @@ const FRAG_MAIN=`
  w*=vec4(.55+.9*nz3.r,.6+.8*nz2.g,.6+.8*nz2.b,.6+.8*nz3.a);
  w.y+=vS.x*(1.-fcore)*smoothstep(.45,.8,nz3.b*.7+nz2.a*.5)*.9;   // grass reclaiming loose dirt patches
  float steep=1.-smoothstep(.5,.72,Nw.y+(nz2.r-.5)*.12);
+#if MTN==5
+ w.w=max(w.w,steep*1.2*(1.-smoothstep(.4,.8,vS.x)));   // Hollowfell: steep dirt (built jumps, cut banks) stays dirt
+#else
  w.w=max(w.w,steep*1.2);
+#endif
  // carved trail: tread, berm walls and the uphill cut bank are dirt
  float tlat=(vT.x-.5)*16.,tal=abs(tlat),tread=vT.y,tcut=vT.z,tberm=vT.w;
  float tAng=(vX.z-.5)*6.2832;vec2 tDir=vec2(sin(tAng),-cos(tAng));
@@ -126,9 +135,12 @@ const FRAG_MAIN=`
  if(onT>.01){w.x=max(w.x,onT*(1.-w.w*.5));w.yz*=1.-onT;}
  w=max(w,0.);w/=max(dot(w,vec4(1.)),1e-4);
  float wT=0.;
-#if MTN==1 || MTN==3
+#if MTN==1 || MTN==3 || MTN==4
  // scree fans below cliffs and ledges take over the soft ground
  float tl=clamp(talus*1.5*(.55+.9*nz2.r)-.1,0.,1.)*(1.-fcore);
+#if MTN==4
+ tl*=(1.-smoothstep(0.,.4,onT))*smoothstep(.4,.8,talus);   // scree only under real cliffs: Razorback's steep plunges and its trails stay dirt and turf
+#endif
  wT=tl*(w.x+w.y+w.z);w.xyz*=1.-tl;
 #endif
  vec2 n;
@@ -146,6 +158,10 @@ const FRAG_MAIN=`
   c=mix(c,vec3(dot(c,vec3(.33)))*vec3(1.18,1.08,.94)*1.22,loose*.5);
 #if MTN==1
   c=mix(c,vec3(dot(c,vec3(.33)))*vec3(1.02,.98,.92),.55);          // grey glacial grit
+#elif MTN==4
+  c=mix(c,vec3(dot(c,vec3(.33)))*vec3(1.04,.97,.88),.22);          // alpine loam: brown, a little washed by the altitude
+#elif MTN==5
+  c*=vec3(.6,.5,.42);moist=clamp(moist+.3,0.,1.);                    // dark, wet highland loam
 #elif MTN==2
   c*=vec3(.5,.43,.38);moist=1.;                                     // saturated dark loam
 #elif MTN==3
@@ -179,7 +195,7 @@ const FRAG_MAIN=`
    c=mix(c,c*vec3(.7,.62,.56)*(.85+.3*nz3.a),tcut*.8);
    dp+=vec3(n.x,0.,n.y)*tcut*.8;
    ttr=line*.6+tberm*.3;
-#if MTN==0
+#if MTN==0 || MTN==4 || MTN==5
    if(fdens>.2&&dist<60.)rootL=max(rootL,roots(wp,vec2(-tDir.y,tDir.x)*tread,smoothstep(.2,.6,fdens)*(.6+.6*tcut),c,dp));
 #endif
   }
@@ -195,14 +211,25 @@ const FRAG_MAIN=`
  if(w.y>.01){
   vec4 a=layAT(1.,wp*(1./2.1),gx*1.05,gy*1.05,nz2.a,n);a.rgb=mix(a.rgb,vec3(.085,.098,.024),fadeT);
   float dry=smoothstep(.45,.75,nz1.g)*.8;
-#if MTN==1
+#if MTN==1 || MTN==4
   // sparse alpine turf: grass only on the higher tufts, gravel between
   a.rgb*=mix(vec3(1.),vec3(1.25,1.1,.8),dry);
   vec2 n2;vec4 g=lay(4.,wp*(1./3.),gx*.73,gy*.73,n2);g.rgb=mix(g.rgb,vec3(.19,.18,.165),fadeT);
   float tuft=smoothstep(.3,.58,a.a+(nz3.g-.5)*.6+(nz2.b-.5)*.4);
+#if MTN==4
+  // Razorback: up high the turf is thin, tawny tundra between the stones; it greens up toward the valley
+  {float lo=smoothstep(500.,2000.,-wp3.z);tuft*=smoothstep(.15,.55,lo+(nz1.g-.5)*.5);
+   a.rgb=mix(vec3(dot(a.rgb,vec3(.33)))*vec3(1.45,1.18,.72),a.rgb,lo*.85);}
+#endif
   a.rgb=mix(g.rgb,a.rgb,tuft);n=mix(n2*.8,n,tuft);a.a=mix(g.a*.6,a.a,tuft);
 #elif MTN==2
   a.rgb*=vec3(.62,.78,.55);
+#elif MTN==5
+  // the moor: tawny purple-moor grass and heather patches up top, greener sheep-grazed grass lower down
+  {float moor=1.-smoothstep(650.,1150.,-wp3.z);float lum=dot(a.rgb,vec3(.33));
+   float hp=smoothstep(.45,.66,nz2.g*.7+nz1.b*.5+(nz3.r-.5)*.25);
+   vec3 moorC=mix(vec3(lum)*vec3(1.55,1.22,.72),vec3(lum)*vec3(1.08,.7,.86)*.9,hp);
+   a.rgb=mix(a.rgb*vec3(.78,.92,.68),moorC,moor*.9);}
 #elif MTN==3
   // sparse dry bunch grass over red gravel
   a.rgb=mix(a.rgb,vec3(dot(a.rgb,vec3(.33)))*vec3(1.75,1.42,.8),.8);
@@ -219,6 +246,11 @@ const FRAG_MAIN=`
 #if MTN==2
   vec4 a=layAT(5.,wp*(1./2.5),gx*.88,gy*.88,nz2.a+.37,n);a.rgb=mix(a.rgb,vec3(.03,.045,.012),fadeT);
   a.rgb*=(.8+.35*nz2.g)*mix(vec3(1.),vec3(.8,.62,.45),smoothstep(.55,.8,nz2.b)*.6);
+#elif MTN==5
+  // conifer floor: deep moss cushions with drifts of rust-brown needle duff (one moss lookup, the duff is a tint)
+  vec4 a=layAT(5.,wp*(1./2.5),gx*.88,gy*.88,nz2.a+.37,n);a.rgb=mix(a.rgb,vec3(.035,.045,.015),fadeT);
+  {float duff=smoothstep(.42,.7,nz2.b*.8+(nz3.g-.5)*.5);a.rgb*=(.85+.3*nz2.g);
+   a.rgb=mix(a.rgb,vec3(dot(a.rgb,vec3(.33)))*vec3(1.7,1.05,.62),duff*.75);}
 #else
   vec4 a=layAT(2.,wp*(1./2.5),gx*.88,gy*.88,nz2.a+.37,n);a.rgb=mix(a.rgb,vec3(.105,.06,.026),fadeT);
   a.rgb*=(.88+.24*nz2.g)*mix(vec3(1.),vec3(1.22,1.1,.7),asp*.6);
@@ -231,6 +263,8 @@ const FRAG_MAIN=`
   vec3 p=wp3*(1./4.5);float rh=0.;float k=nz2.a*.5+nz1.b*.5;
 #if MTN==3
   float RL=6.;p=wp3*(1./6.);
+#elif MTN==4
+  float RL=3.;p=wp3*(1./5.2);
 #else
   float RL=3.;
 #endif
@@ -238,9 +272,27 @@ const FRAG_MAIN=`
   if(bw.y>.03){vec2 uv=p.xz;vec4 r=lay(RL,uv,dFdx(uv),dFdy(uv),n);aR+=r.rgb*bw.y;rh+=r.a*bw.y;pR+=(vec3(1.,0.,0.)*n.x+vec3(0.,0.,1.)*n.y)*bw.y;}
   if(bw.z>.03){vec2 uv=p.xy+.5;vec4 r=layAT(RL,uv,dFdx(uv),dFdy(uv),k+.31,n);aR+=r.rgb*bw.z;rh+=r.a*bw.z;pR+=(vec3(1.,0.,0.)*n.x+vec3(0.,1.,0.)*n.y)*bw.z;}
   aR=mix(aR,MTN==3?vec3(.34,.17,.1):vec3(.12,.112,.098),fadeT*.6);
+  float vert=1.-smoothstep(.35,.75,abs(Nw.y));
+#if MTN==4
+  // granite has no bedding: massive pale rock cut by two joint sets, black water streaks down the faces, lichen on tops
+  {vec4 jt=texture(tNoise,wp*(1./37.)+wp3.y*(1./97.));
+   float j1=abs(fract(dot(wp,vec2(.8,.6))*(1./7.3)+jt.r*.7)-.5),j2=abs(fract(dot(wp,vec2(-.6,.8))*(1./11.)+jt.g*.6+wp3.y*(1./43.))-.5);
+   float j3=abs(fract(wp3.y*(1./5.9)+jt.b*.8+dot(wp,vec2(.3,.2))*(1./30.))-.5);              // exfoliation sheets
+   float jk=max(smoothstep(.03,.0,j1)*(.6+.4*jt.a),smoothstep(.022,.0,j2))*vert+smoothstep(.02,.0,j3)*smoothstep(.15,.55,vert)*.6;
+   jk*=fadeN*.7+.3;
+   aR=mix(aR,vec3(dot(aR,vec3(.33)))*vec3(1.07,1.03,.99),.45)*1.22*(.86+.28*jt.a);           // pale grey, warm feldspar
+   aR*=1.-.6*jk;rh-=jk*.4;
+   pR+=(vec3(.8,0.,.6)*(j1-.25)+vec3(-.6,0.,.8)*(j2-.25))*vert*.5*fadeN;
+   vec2 hz=normalize(vec2(-Nw.z,Nw.x)+1e-4);float hc=dot(wp,hz);
+   vec4 vs=texture(tNoise,vec2(hc*(1./3.7),wp3.y*(1./75.)));
+   float stk=smoothstep(.52,.8,vs.r+(jt.b-.5)*.3)*vert*smoothstep(.25,.6,vs.g);
+   aR=mix(aR,aR*vec3(.3,.29,.28),stk*.8);
+   vec4 lc=texture(tNoise,wp3.xz*(1./.9)+wp3.y*.37);
+   float li=smoothstep(.64,.71,lc.a)*smoothstep(.2,.8,Nw.y+.3);
+   aR=mix(aR,mix(vec3(.45,.47,.33),vec3(.66,.4,.13),step(.62,lc.r)),li*.7);}
+#else
   // strata: horizontal bands of tone and hardness following world height, slightly warped
   vec4 sb=texture(tNoise,vec2(wp3.y*(1./11.)+nz2.r*.15,wp.x*(1./700.)+wp.y*(1./900.)));
-  float vert=1.-smoothstep(.35,.75,abs(Nw.y));
   aR*=mix(1.,.8+.42*sb.g,vert)*mix(vec3(1.),vec3(1.06,.98,.9),nz2.b)*(.85+.3*nz1.a)*mix(1.,.85,fdens);
   aR*=mix(1.,.72,vert*smoothstep(.62,.78,sb.b));                 // darker seams between beds
   // bedding: thin horizontal ribs and recessed seams catch the low sun on vertical faces
@@ -248,6 +300,7 @@ const FRAG_MAIN=`
    pR+=vec3(0.,1.,0.)*(cos(ph)*.45+cos(ph*2.7+sb.a*5.)*.2)*vert*fadeN;
    aR*=1.+vert*(.1*rib+.05*rib2);
    float seam=smoothstep(.85,.97,sin(wp3.y*(6.2832/3.7)+sb.g*9.));aR*=1.-.45*seam*vert;rh-=seam*vert*.3;}
+#endif
 #if MTN==1
   aR=mix(aR,vec3(dot(aR,vec3(.33)))*vec3(1.08,1.06,1.03),.5)*1.12;   // pale alpine limestone-grey
   vec4 lc=texture(tNoise,wp3.xz*(1./.9)+wp3.y*.37);
@@ -262,13 +315,13 @@ const FRAG_MAIN=`
    float varn=smoothstep(.5,.8,vs.r+(fm.a-.5)*.4)*vert*smoothstep(.2,.6,vs.g);
    aR=mix(aR,aR*vec3(.32,.24,.2),varn*.75);}
   aR=mix(aR,aR*vec3(1.1,1.05,1.),fadeT*.3);
-#elif MTN==2
-  float mo=smoothstep(.45,.8,Nw.y+(nz3.g-.5)*.5)*smoothstep(.35,.6,nz2.g+fdens*.3);
+#elif MTN==2 || MTN==5
+  float mo=smoothstep(.45,.8,Nw.y+(nz3.g-.5)*.5)*smoothstep(.35,.6,nz2.g+fdens*.3)*(MTN==5?.75:1.);
   aR*=.62;aR=mix(aR,vec3(.05,.085,.02)*(.7+.6*nz3.b),mo);              // wet, moss on the tops
 #endif
   hh.w=rh;pR*=1.3;
  }
-#if MTN==1 || MTN==3
+#if MTN==1 || MTN==3 || MTN==4
  if(wT>.01){vec4 a=layAT(4.,wp*(1./3.),gx*.73,gy*.73,nz2.a+.6,n);a.rgb=mix(a.rgb,vec3(.19,.18,.165),fadeT);
 #if MTN==3
   a.rgb*=vec3(1.5,.9,.66);
@@ -302,6 +355,17 @@ const FRAG_MAIN=`
   float sn=smoothstep(.66,.8,hollow*.7+(nz2.b-.5)*.5+(nz1.a-.5)*.6+(nz3.a-.5)*.15+H*.1)*top*smoothstep(.62,.8,Nw.y)*(1.-wf.w*.6)*(1.-smoothstep(0.,.3,onT))*smoothstep(1.6,3.,tal);
   if(sn>.001){vec3 sc=vec3(.86,.89,.95)*(.92+.1*nz3.g);sc=mix(sc,sc*vec3(.82,.78,.72),smoothstep(.5,.0,sn)*.6);   // dirty, wind-scoured edges
    col=mix(col,sc,sn);pert=mix(pert,pert*.15,sn);rough=mix(rough,.55,sn);H=mix(H,.5,sn);}}
+#elif MTN==4
+ // ── snow (Razorback): lies where the low sun can't reach — hollows, couloirs, slopes facing away from the sun, ledges
+ // on the faces — patchy up high, thinning out below a snowline ~1.5 km down; never on the trail
+ {float s=-wp3.z,alt=1.-smoothstep(700.,2100.,s);
+  float shadeA=smoothstep(.05,-.35,dot(Nw.xz,vec2(.737,-.676)));          // aspect away from the sun (scaled by steepness)
+  float lodge=smoothstep(.5,.78,Nw.y);                                    // nothing sticks much past ~55°
+  float sn=smoothstep(.5,.7,hollow*.8+shadeA*.35+(nz2.b-.5)*.6+(nz1.a-.5)*.55+(nz3.a-.5)*.18+H*.08-(1.-alt)*.75)
+   *lodge*(1.-wf.w*.25*(1.-shadeA))*(1.-smoothstep(0.,.3,onT))*smoothstep(1.8,3.2,tal);
+  if(sn>.001){float edge=smoothstep(.0,.55,sn);
+   vec3 sc=vec3(.9,.93,.98)*(.93+.08*nz3.g);sc=mix(sc*vec3(.8,.77,.72),sc,edge);   // dirty, thin, wind-scoured edges
+   col=mix(col,sc,sn);pert=mix(pert,pert*.12+vec3(nz3.r-.5,0.,nz3.b-.5)*.08,sn);rough=mix(rough,.5,sn);H=mix(H,.55,sn);}}
 #endif
  float far=smoothstep(60.,420.,dist);
  col*=mix(1.,.85+.3*nz1.r,.6*far+.25);

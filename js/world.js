@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { FXAAShader } from 'three/addons/shaders/FXAAShader.js';
-import {clamp,lerp,smooth,damp,rng,$,noise2,fbm,isMobile,SUN,FOG_BASE,FOG_SUN,GLSL_NOISE} from './core.js';
+import {clamp,lerp,smooth,damp,rng,$,noise2,fbm,isMobile,SUN,FOG_BASE,FOG_SUN,GLSL_NOISE,MOUNTAIN} from './core.js';
 // ═════════════════════════════════════════════════════════════════════════════
 // Sky, light, shadows, atmosphere and the post chain.
 //
@@ -70,7 +70,9 @@ float atmFogAmount(float L,float dy,float dens){
  float a=dens*L;
  float k=dy*0.022;
  float hf=abs(k)>1e-3?(1.0-exp(-k))/k:1.0;
- float tau=a*a+0.00045*L*min(hf,8.0);
+ // the valley haze layer thins with the air on clearer mountains (dens below the default .0021); at the default it is
+ // exactly the original 0.00045
+ float tau=a*a+(dens<0.00205?dens*(0.00045/0.0021):0.00045)*L*min(hf,8.0);
  return 1.0-exp(-tau);
 }
 #endif
@@ -81,6 +83,12 @@ const sunT=k=>ATM.TR.map(t=>Math.exp(-(t+ATM.TM)*airmass(SUN.y)*k));
 const SUN_RGB=(()=>{const t=sunT(1),m=Math.max(...t);return new THREE.Color().setRGB(t[0]/m,t[1]/m,t[2]/m).lerp(new THREE.Color(1,.93,.84),.32);})();
 
 scene.fog=new THREE.FogExp2(new THREE.Color(1,1,1),.0021);   // fog.color is a tint on the atmosphere colour
+// Per-mountain air: aerial-haze density and a tint on the atmosphere colour. Mountains not listed keep the original
+// values (density .0021, no tint). Razorback's thin, dry high-alpine air is clearer, so its long views keep their depth.
+// Hollowfell's damp highland air is a touch hazier than Razorback's but cooler and darker-tinted, so the forest stays
+// deep green instead of washing out to white.
+const AIR={razorback:{d:.0013,c:[1,1,1]},hollowfell:{d:.0016,c:[.86,.93,.9]}},AIR0={d:.0021,c:[1,1,1]};
+function setAir(){const a=AIR[MOUNTAIN.id]||AIR0;scene.fog.density=a.d;scene.fog.color.setRGB(a.c[0],a.c[1],a.c[2]);}
 
 // Sun-aware fog through the standard chunks: every built-in material picks this up.
 // vFogDepth (view depth) is kept because terrain.js reads it.
@@ -499,6 +507,7 @@ let speedK=0,sunVis=0,fpMode=false;
 // focus = bike position; speed in m/s; opts = {firstPerson} (a bare boolean is accepted for compatibility)
 export function updateWorld(dt,now,focus,speed,opts){
  fpMode=!!(opts&&typeof opts==='object'&&opts.firstPerson);
+ setAir();
  frameNo++;
  if(DEV.cam){const c=DEV.cam;camera.position.set(...c.pos);camera.up.set(0,1,0);camera.lookAt(...c.look);if(c.fov){camera.fov=c.fov;camera.updateProjectionMatrix();}speed=0;}
  camera.updateMatrixWorld();

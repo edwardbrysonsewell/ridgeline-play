@@ -3,7 +3,10 @@
 //   genTile(i,j)          trees, props (boulders/logs/stumps) and colliders for one 64 m tile
 //   genGround(i,j,mobile) ground cover (grass, flowers, ferns, shrubs, saplings, small rocks), bucketed in 16 m cells
 // Biomes: ridgeline (spruce/fir/pine/aspen + meadows), widowmaker (alpine larch, krummholz, scree under cliffs),
-// shoreline (old-growth cedar / Douglas fir / hemlock rainforest, sword ferns, salal, nurse logs).
+// shoreline (old-growth cedar / Douglas fir / hemlock rainforest, sword ferns, salal, nurse logs),
+// highland (Hollowfell: tall dark spruce/fir/pine timber, bracken, bilberry, heather on the open moor, very few rocks),
+// alpine (Razorback: Widowmaker's species — open tundra and granite up high, larch and fir forest from ~500 m down; no
+// boulder fields: a few boulders, mostly in clusters under the cliffs, none within ~10 m of a trail).
 import {MOUNTAIN,setMountain,TILE,heightAt,forestAt,aspenAt,rockZone,clearAt,padClear,trailAt,TRAILS,surfaceInto,featureList,noise2,fbm,rng,hash2,clamp,lerp,smooth} from './terrainfn.js';
 
 // species sets per mountain: the index is what tile data stores (keep in sync with SPECIES in flora.js)
@@ -12,9 +15,15 @@ export const SETS={
  widowmaker:['larch','larchB','krumm','stuntFir','whitebark','snagAlp'],
  shoreline:['cedar','doug','hemlock','snagRain'],
  desert:['juniper','pinyon','juniperDead']};
+SETS.alpine=SETS.widowmaker;
+SETS.highland=['spruceA','spruceB','fir','pine','snag'];   // Hollowfell: tall, dark conifers (no aspen)   // Razorback: the same high-alpine species, far sparser (see ALP below)
 // trunk radius at ~0.5 m (m, before instance scale) for colliders, and the base radius used for corridor clearance
 const TRUNK={spruceA:.3,spruceB:.34,fir:.23,pine:.25,snag:.27,aspenA:.17,aspenB:.17,
  larch:.27,larchB:.25,krumm:.16,stuntFir:.16,whitebark:.3,snagAlp:.25,cedar:1.38,doug:1.15,hemlock:.74,snagRain:.9,juniper:.22,pinyon:.24,juniperDead:.2};
+// "Less trees" (the author, 2026-10-06): every forest is thinned to KEEP of its old density and broken by open glades
+// ~80 m across (20 % of the trees left inside them), and trees stand ≥ 2.5 m further back from every riding line. The
+// trees that remain are a subset of the old ones, at the same spots, so each mountain's forest keeps its character.
+const KEEP={ridgeline:.85,freefall:.7,widowmaker:.95,shoreline:1,rampage:1,razorback:.9,hollowfell:.9},TREE_LINE_CLR=2.5;
 export const PROP_KEYS=['rockA','rockB','rockC','log','logOld','stump','logMoss','stumpMoss'];
 export const GROUND_KEYS=['grass','meadow','flowersA','flowersB','fern','bush','sapFir','sapSpruce','pebble'];
 export const KIND=['tree','rock','log'];
@@ -32,7 +41,7 @@ const slopeAt=(x,z)=>{const hx=heightAt(x+1,z)-heightAt(x-1,z),hz=heightAt(x,z+1
 const underCliff=(x,z,y)=>heightAt(x,z+12)-y>6.5;
 
 export function genTile(i,j){
- const M=MOUNTAIN.biome||MOUNTAIN.id,x0=i*TILE,z0=j*TILE,inFeat=featTest(x0,z0,x0+TILE,z0+TILE),set=SETS[M]||SETS.ridgeline;
+ const BIO=MOUNTAIN.biome||MOUNTAIN.id,ALP=BIO==='alpine',HL=BIO==='highland',M=ALP?'widowmaker':BIO,x0=i*TILE,z0=j*TILE,inFeat=featTest(x0,z0,x0+TILE,z0+TILE),set=SETS[M]||SETS.ridgeline;
  const trees=[],props=[],col=[];
  // ── trees: jittered grid, accepted by forest density (edges + small glades); corridors and features kept open
  {const r=rng(seedOf(i,j,1)),N=M==='shoreline'?10:13,cs=TILE/N;
@@ -40,25 +49,30 @@ export function genTile(i,j){
    const f=forestAt(x,z),s=-z;let p,sp,sc;
    if(M==='shoreline'){p=smooth(.02,.35,f)*.93+(f<.02?.03:0);}
    else if(M==='desert'){p=.006+.03*smooth(-.1,.5,noise2(x*.013+5,z*.013-2));}
+   else if(HL){const glade=smooth(-.38,.12,noise2(x*.031+3.3,z*.031-1.1));p=smooth(.03,.45,f)*(.32+.68*glade)*.36;}
+   else if(ALP){const glade=smooth(-.38,.12,noise2(x*.031+3.3,z*.031-1.1));p=smooth(.03,.5,f)*(.3+.7*glade)*.5+.006*(1-rockZone(x,z))*smooth(400,1100,s);}
    else if(M==='widowmaker'){const glade=smooth(-.38,.12,noise2(x*.031+3.3,z*.031-1.1));p=smooth(.03,.5,f)*(.35+.65*glade)*.85+.022*(1-rockZone(x,z))*smooth(250,700,s);}
    else{const glade=smooth(-.38,.12,noise2(x*.031+3.3,z*.031-1.1));p=smooth(.03,.5,f)*(.28+.72*glade)*.95+(f<.03?.004:0);}
+   {const og=smooth(-.18,.22,noise2(x*.0115+17.3,z*.0115+4.1));p*=(KEEP[MOUNTAIN.id]??.9)*(.2+.8*og);}   // thinned, with glades
    if(u1>p)continue;
    // species and size
    if(M==='shoreline'){sp=u3<.07?3:u3<.42?0:u3<.72?1:2;sc=u4<.3?.42+u5*.3:.78+u5*.45;}
    else if(M==='desert'){sp=u3<.22?2:u3<.62?0:1;sc=.55+u5*.6;}
+   else if(HL){sp=u3<.05?4:u3<.2?3:u3<.45?2:(u6<.55?0:1);sc=(u4<.12?.45+u5*.25:.85+u5*.55)*lerp(.8,1.12,smooth(900,1700,s));}   // tall timber
    else if(M==='widowmaker'){const rk=rockZone(x,z),hi=1-smooth(300,1400,s);
     sp=u3<.06?5:u3<.06+.18+.25*rk+.15*hi?2:u3<.55?(u6<.6?0:1):u3<.78?3:4;
-    sc=sp===2?.7+u5*.6:u4<.2?.45+u5*.25:.75+u5*.45;}
+    sc=sp===2?.7+u5*.6:u4<.2?.45+u5*.25:.75+u5*.45;if(ALP)sc*=lerp(.6,.95,smooth(1200,2400,s));}
    else{const asp=u2<aspenAt(x,z)*.92;
     if(asp){sp=u3<.55?5:6;sc=u4<.18?.5+u5*.25:.82+u5*.4;}
     else{const pineP=clamp(.12+.38*smooth(700,2500,s)+.25*(1-f),.1,.65);sp=u3<.05?4:u3<.05+pineP?3:u3<.05+pineP+.24?2:(u6<.55?0:1);sc=u4<.15?.3+u5*.25:.72+u5*.55;}
     sc*=lerp(.62,1,smooth(150,520,s));}
    const key=set[sp],tr=TRUNK[key]*sc;
-   if(!clearRing(x,z,tr+(M==='shoreline'?1.2:.4))||inFeat(x,z,1.5+tr))continue;
+   if(!clearRing(x,z,tr+(M==='shoreline'?1.2:.4)+TREE_LINE_CLR)||inFeat(x,z,1.5+tr))continue;
    if(M!=='ridgeline'&&slopeAt(x,z)>(M==='widowmaker'?.95:M==='desert'?.7:1.3))continue;          // nothing on cliff faces
    const y=heightAt(x,z);
    let c;
    if(M==='desert')c=sp===2?[.95+u7*.15,.93+u7*.15,.9+u8*.15]:[.8+u7*.25,.85+u8*.2,.75+u6*.2];
+   else if(HL)c=sp===4?[.8+u7*.2,.8+u7*.2,.78+u8*.2]:[.62+u7*.25,.76+u8*.22,.68+u6*.2];   // dark, wet greens
    else if(M==='shoreline')c=sp===3?[.8+u7*.2,.82+u7*.2,.78+u8*.2]:[.72+u7*.35,.8+u8*.3,.72+u6*.3];
    else if(M==='widowmaker')c=sp===0||sp===1?[.85+u7*.3,.8+u8*.35,.75+u6*.3]:[.75+u7*.35,.82+u8*.3,.8+u6*.3];
    else c=sp>=5?[.9+u7*.25,.85+u8*.25,.8+u6*.2]:sp===4?[.85+u7*.2,.85+u7*.2,.85+u8*.2]:[.78+u7*.4,.84+u8*.32,.8+u6*.3];
@@ -67,15 +81,17 @@ export function genTile(i,j){
  // ── boulders: rock zones (and scree under cliff bands on Widowmaker), a few erratics elsewhere
  {const r=rng(seedOf(i,j,2)),N=8,cs=TILE/N;
   for(let a=0;a<N;a++)for(let b=0;b<N;b++){const x=x0+(b+.1+.8*r())*cs,z=z0+(a+.1+.8*r())*cs;const u1=r(),u2=r(),u3=r(),u4=r(),u5=r(),u6=r();
-   const rk=rockZone(x,z);let p=M==='shoreline'?rk*.3+.01:M==='widowmaker'?rk*.5+.02:M==='desert'?.07:rk*.42+.012;let big=M==='widowmaker'?1.4:M==='desert'?1.25:1;
-   let y=null;if((M==='widowmaker'||M==='desert')&&u1>=p){y=heightAt(x,z);if(underCliff(x,z,y)){p+=.55;big=1.2;}}
+   // Widowmaker and Rampage (2026-10-06): boulder fields thinned to ~a quarter, clusters kept under the cliffs, ≥ ~6 m
+   // clear of every riding line; their cliffs, faces and terraces (the terrain itself) are untouched
+   const rk=rockZone(x,z);let p=M==='shoreline'?rk*.3+.01:HL?rk*.15+.003:ALP?rk*.15+.002:M==='widowmaker'?rk*.17+.006:M==='desert'?.022:rk*.42+.012;let big=M==='widowmaker'?1.4:M==='desert'?1.25:1;
+   let y=null;if((M==='widowmaker'||M==='desert')&&u1>=p){y=heightAt(x,z);if(underCliff(x,z,y)){p+=ALP?.12:.2;big=1.2;}}
    if(u1>p)continue;const sc=(.7+u2*u2*2.3)*(rk>.3?1:.75)*big;
-   if(!clearRing(x,z,sc*1.2)||inFeat(x,z,sc*1.3))continue;if((M==='widowmaker'||M==='desert')&&slopeAt(x,z)>1.1)continue;
+   if(!clearRing(x,z,sc*1.2+(ALP||HL?8:M==='widowmaker'||M==='desert'?5:0))||inFeat(x,z,sc*1.3))continue;if((M==='widowmaker'||M==='desert')&&slopeAt(x,z)>1.1)continue;   // Razorback: ~10 m clear of every trail
    if(y===null)y=heightAt(x,z);const t=.85+u4*.3;const moss=M==='shoreline',sand=M==='desert';
    props.push(x,y-sc*.22,z,(u5-.5)*.3,u3*6.283,(u6-.5)*.3,sc,Math.floor(u3*2.999),moss?t*.8:sand?t*(1.3+u5*.15):t,moss?t*.92:sand?t*(.78+u6*.1):t*(.97+u5*.05),moss?t*.72:sand?t*.58:t*(.93+u6*.06),0);
    col.push(x,z,sc*1.05,1);
-   for(let k=0;k<(M==='widowmaker'||M==='desert'?4:2);k++){const v1=r(),v2=r(),v3=r();if(v1<.45)continue;const a2=v2*6.283,dd=sc*(1.4+v3*.8),xx=x+Math.cos(a2)*dd,zz=z+Math.sin(a2)*dd;const s2=sc*(.22+v3*.25);
-    if(!clearRing(xx,zz,s2)||inFeat(xx,zz,s2))continue;props.push(xx,heightAt(xx,zz)-s2*.22,zz,0,v2*6.283,0,s2,(k+1)%3,M==='desert'?t*1.3:t,M==='desert'?t*.8:t,M==='desert'?t*.6:t,0);if(s2>.45)col.push(xx,zz,s2*1.05,1);}}}
+   for(let k=0;k<(ALP||HL?1:M==='widowmaker'||M==='desert'?2:2);k++){const v1=r(),v2=r(),v3=r();if(v1<.45)continue;const a2=v2*6.283,dd=sc*(1.4+v3*.8),xx=x+Math.cos(a2)*dd,zz=z+Math.sin(a2)*dd;const s2=sc*(.22+v3*.25);
+    if(!clearRing(xx,zz,s2+(M==='widowmaker'||M==='desert'?5:0))||inFeat(xx,zz,s2))continue;props.push(xx,heightAt(xx,zz)-s2*.22,zz,0,v2*6.283,0,s2,(k+1)%3,M==='desert'?t*1.3:t,M==='desert'?t*.8:t,M==='desert'?t*.6:t,0);if(s2>.45)col.push(xx,zz,s2*1.05,1);}}}
  // ── fallen logs and stumps on the forest floor (nurse logs and giant mossy stumps on Shoreline)
  {const r=rng(seedOf(i,j,3)),N=3,cs=TILE/N,shore=M==='shoreline';
   for(let a=0;a<N;a++)for(let b=0;b<N;b++){const x=x0+(b+.15+.7*r())*cs,z=z0+(a+.15+.7*r())*cs;const u1=r(),u2=r(),u3=r(),u4=r(),u5=r();
@@ -93,7 +109,7 @@ export function genTile(i,j){
 
 // ── ground cover. Heights come from a 2 m grid (bilinear), surface weights from a 4 m grid.
 export function genGround(i,j,mobile){
- const M=MOUNTAIN.biome||MOUNTAIN.id,x0=i*TILE,z0=j*TILE,NH=33,HS=2,NS=17,SS=4;
+ const BIO=MOUNTAIN.biome||MOUNTAIN.id,ALP=BIO==='alpine',HL=BIO==='highland',M=ALP?'widowmaker':BIO,x0=i*TILE,z0=j*TILE,NH=33,HS=2,NS=17,SS=4;
  const H=new Float32Array(NH*NH);for(let a=0;a<NH;a++)for(let b=0;b<NH;b++)H[a*NH+b]=heightAt(x0+b*HS,z0+a*HS);
  const hAt=(x,z)=>{const fx=clamp((x-x0)/HS,0,NH-1.001),fz=clamp((z-z0)/HS,0,NH-1.001),b=Math.floor(fx),a=Math.floor(fz),tx=fx-b,tz=fz-a,k=a*NH+b;
   return lerp(lerp(H[k],H[k+1],tx),lerp(H[k+NH],H[k+NH+1],tx),tz);};
@@ -109,7 +125,7 @@ export function genGround(i,j,mobile){
  const out=GROUND_KEYS.map(()=>[]),offs=GROUND_KEYS.map(()=>new Int32Array(SUB*SUB+1));
  const r=rng(seedOf(i,j,4)),cell=TILE/SUB,gs=mobile?1.75:1.4;
  // per-mountain densities
- const B=M==='desert'?{grass:.45,meadow:1,flower:.05,fern:.3,bush:.2,sap:.02,peb:.4}:M==='widowmaker'?{grass:.55,meadow:.65,flower:.1,fern:.2,bush:.12,sap:.08,peb:.85}:M==='shoreline'?{grass:.22,meadow:0,flower:.012,fern:.62,bush:.2,sap:.1,peb:.35}:{grass:1,meadow:.2,flower:.06,fern:.36,bush:.1,sap:.12,peb:.5};
+ const B=HL?{grass:.9,meadow:.45,flower:.22,fern:.55,bush:.16,sap:.12,peb:.12}:ALP?{grass:.38,meadow:.5,flower:.07,fern:.13,bush:.09,sap:.05,peb:.2}:M==='desert'?{grass:.45,meadow:1,flower:.05,fern:.3,bush:.2,sap:.02,peb:.12}:M==='widowmaker'?{grass:.55,meadow:.65,flower:.1,fern:.2,bush:.12,sap:.08,peb:.3}:M==='shoreline'?{grass:.22,meadow:0,flower:.012,fern:.62,bush:.2,sap:.1,peb:.35}:{grass:1,meadow:.2,flower:.06,fern:.36,bush:.1,sap:.12,peb:.5};
  const steepMax=M==='widowmaker'?1.0:M==='desert'?.8:1.6;const hasTr=TRAILS.length>0;
  for(let ca=0;ca<SUB;ca++)for(let cb=0;cb<SUB;cb++){const cx0=x0+cb*cell,cz0=z0+ca*cell,ci=ca*SUB+cb;
   for(let k=0;k<GROUND_KEYS.length;k++)offs[k][ci]=out[k].length/G_STRIDE;
@@ -117,11 +133,12 @@ export function genGround(i,j,mobile){
   for(let a=0;a<n;a++)for(let b=0;b<n;b++){const x=cx0+(b+r())*cell/n,z=cz0+(a+r())*cell/n;const u1=r(),u2=r(),u3=r(),u4=r(),u5=r();
    const dirt=wAt(x,z,0),gr=wAt(x,z,1),ff=wAt(x,z,2),rk=wAt(x,z,3);if(slope(x,z)>steepMax)continue;const y=hAt(x,z);if(M==='shoreline'&&clearAt(x,z)>.9)continue;
    let shoulder=1;if(hasTr){const tr=trailAt(x,z);if(tr){if(tr.dirt>.2)continue;shoulder=.3+.7*smooth(tr.w+.2,tr.w+1.6,Math.abs(tr.lat));}}if(u5>shoulder)continue;
-   const pg=M==='desert'?(gr*.5+rk*.12+.04)*B.grass*(1-dirt*.6):(gr*1.05+ff*.18-dirt*.6-rk*.5)*B.grass;
+   const pg=(ALP?lerp(.3,1,smooth(500,1900,-z)):1)*(M==='desert'?(gr*.5+rk*.12+.04)*B.grass*(1-dirt*.6):(gr*1.05+ff*.18-dirt*.6-rk*.5)*B.grass);
    if(u1<pg){const n2=noise2(x*.09,z*.09),dry=clamp(.45+n2*.9-ff*.4+(M==='widowmaker'?.25:0),0,1);const meadow=M==='desert'||ff<.3&&u2<(B.meadow+dry*.5)*(M==='shoreline'?0:1);const sc=(.8+u3*.5)*(M==='widowmaker'?.75:M==='desert'?.7:1);
     if(M==='desert')out[1].push(x,y-.03,z,u4*6.283,sc,sc*(.75+u5*.5),1.05+u5*.15,.9+u5*.1,.62+u5*.1);
     else out[meadow?1:0].push(x,y-.03,z,u4*6.283,sc,sc*(.75+u5*.5),lerp(.62,.86,dry)*(.88+u5*.24),lerp(.8,.78,dry)*(.9+u5*.2),lerp(.5,.48,dry)*(.88+u5*.24));}
-   else if(u1<pg+B.flower*(M==='desert'?.5:gr)&&u2<.5){const k=u3<.5?2:3;out[k].push(x,y-.02,z,u4*6.283,.8+u5*.5,.8+u5*.5,1,1,1);}}
+   else if(HL&&u1<pg+B.flower*gr*(1-smooth(600,1000,-z))*2.2){out[2].push(x,y-.03,z,u4*6.283,.5+u5*.5,.35+u5*.3,1.05+u3*.15,.7+u5*.12,.9+u3*.15);}   // heather clumps on the moor
+   else if(!HL&&u1<pg+B.flower*(M==='desert'?.5:gr)&&u2<.5){const k=u3<.5?2:3;out[k].push(x,y-.02,z,u4*6.283,.8+u5*.5,.8+u5*.5,1,1,1);}}
   // shrubs / ferns / saplings / small rocks
   const m=Math.round(cell/2.6);
   for(let a=0;a<m;a++)for(let b=0;b<m;b++){const x=cx0+(b+r())*cell/m,z=cz0+(a+r())*cell/m;const u1=r(),u2=r(),u3=r(),u4=r(),u5=r();
@@ -139,7 +156,7 @@ export function genGround(i,j,mobile){
      else {const asp=aspenAt(x,z)>.5;out[5].push(x,y-.08,z,u2*6.283,.6+u3*.8,.6+u3*.8,asp?1.1:.85+u4*.3,asp?1:.9+u5*.2,asp?.7:.8+u4*.2);}}
     else if(u1<pf+pb+B.sap&&(M==='desert'||f>.03&&f<(M==='shoreline'?.95:.6))&&u5<.35&&clearAt(x,z)<=0){
      const s0=M==='shoreline'?.035+u3*.05:M==='widowmaker'?.15+u3*.2:M==='desert'?.25+u3*.3:.07+u3*.09;out[u4<.5?6:7].push(x,y-.05,z,u2*6.283,s0,s0,.8+u4*.3,.88+u5*.25,.85+u4*.2);}}
-   const pp=(rk*.5+.03)*B.peb+(cliff>.5?.6:0);
+   const pp=(rk*.5+.03)*B.peb+(cliff>.5?(ALP?.08:M==='widowmaker'||M==='desert'?.15:.6):0);
    if(u5<pp&&dirt<.7){const sc=(.1+u3*u3*.45)*(cliff>.5?1.5:1);const moss=M==='shoreline',sand=M==='desert';out[8].push(x,y-sc*.25,z,u2*6.283,sc,sc*(.8+u4*.4),moss?.75:sand?1.25+u3*.15:.9+u3*.2,moss?.9:sand?.8+u3*.1:.9+u3*.18,moss?.65:sand?.6:.88+u3*.15);}}}
  for(let k=0;k<GROUND_KEYS.length;k++)offs[k][SUB*SUB]=out[k].length/G_STRIDE;
  return {ground:out.map(a=>new Float32Array(a)),offs};}

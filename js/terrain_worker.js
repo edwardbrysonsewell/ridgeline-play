@@ -61,7 +61,7 @@ const OPTS = [16, 8, 4, 2, 1];   // spacings in lattice units: 2, 1, ½, ¼, ⅛
 
 // talus and hollows on a coarse 2 m lattice (only where the mountain uses them)
 function extrasGrid(x0, z0, step, n) {
-  const bio = MOUNTAIN.biome || MOUNTAIN.id, wantT = bio === 'widowmaker' || bio === 'desert', wantH = bio !== 'ridgeline';
+  const bio = MOUNTAIN.biome || MOUNTAIN.id, wantT = bio === 'widowmaker' || bio === 'desert' || bio === 'alpine', wantH = bio !== 'ridgeline';
   const G = new Float32Array((n + 1) * (n + 1) * 2);
   if (!wantT && !wantH) return G;
   const gr = MOUNTAIN.grade;

@@ -382,7 +382,9 @@ const GROUND_BY={
  ridgeline:{grass:['grass','grass'],meadow:['meadow','grass'],flowersA:['flowersA','plants'],flowersB:['flowersB','plants'],fern:['fern','plants'],bush:['bush','asp'],sapFir:['fir_l','con'],sapSpruce:['spruceA_l','con'],pebble:['pebble','rock']},
  widowmaker:{grass:['grass','grass'],meadow:['meadow','grass'],flowersA:['flowersA','plants'],flowersB:['flowersB','plants'],fern:['heather','asp'],bush:['krumm_l','con'],sapFir:['stuntFir_l','con'],sapSpruce:['larch_l','con'],pebble:['pebble','rock']},
  desert:{grass:['meadow','grass'],meadow:['meadow','grass'],flowersA:['yucca','con'],flowersB:['pear','con'],fern:['sage','asp'],bush:['rabbit','asp'],sapFir:['juniper_l','con'],sapSpruce:['pinyon_l','con'],pebble:['pebble','rock']},
- shoreline:{grass:['grass','grass'],meadow:['meadow','grass'],flowersA:['flowersA','plants'],flowersB:['flowersB','plants'],fern:['sword','rainPlants'],bush:['salal','rain'],sapFir:['hemlock_l','rain'],sapSpruce:['cedar_l','rain'],pebble:['pebble','rock']}};
+ shoreline:{grass:['grass','grass'],meadow:['meadow','grass'],flowersA:['flowersA','plants'],flowersB:['flowersB','plants'],fern:['sword','rainPlants'],bush:['salal','rain'],sapFir:['hemlock_l','rain'],sapSpruce:['cedar_l','rain'],pebble:['pebble','rock']},
+ // Hollowfell: heather (flowersA slot) on the moor, bracken, bilberry, young spruce/fir under the timber
+ highland:{grass:['grass','grass'],meadow:['meadow','grass'],flowersA:['heather','asp'],flowersB:['flowersB','plants'],fern:['fern','plants'],bush:['bush','asp'],sapFir:['fir_l','con'],sapSpruce:['spruceA_l','con'],pebble:['pebble','rock']}};
 
 // ───────────────────────── impostors (baked once at load from the real tree geometry)
 const CELL=256,IMP_W=CELL*8,IMP_H=CELL*2;
@@ -471,12 +473,14 @@ function dropPools(list){for(const p of list){scene.remove(p.m);p.m.dispose();}l
 let setP=null,setId=null;
 export function setMountain(id){setId=id;gen++;tiles.clear();for(const j of qHi.splice(0).concat(qLo.splice(0)))j.res(j.msg.op==='tile'?{trees:new Float32Array(0),props:new Float32Array(0),col:new Float32Array(0)}:null);return setP=texReady.then(()=>doSetMountain(id));}
 const biomeOf=id=>{const m=MOUNTAINS.find(q=>q.id===id);return m&&m.biome||id;};
+// Razorback's high-alpine biome uses the Widowmaker species (larch, krummholz, stunted fir, whitebark) and ground set,
+// placed far more sparsely by flora_worker.js; only the lichen on boulders differs
 async function doSetMountain(id){if(id!==setId)return;const bio=biomeOf(id),set=SETS[bio]||SETS.ridgeline;tiles.clear();
  for(const p of[P.imp,...P.props,...P.propsLo]){p.begin();p.end(0,0,0,1);}
- if(mtnId!==bio){const t=performance.now();mtnId=bio;SET=set;let tg=0;MAT.rock.userData.u.uMoss.value=bio==='desert'?0:bio==='widowmaker'?.4:1;
+ if(mtnId!==bio){const t=performance.now();mtnId=bio;SET=set;let tg=0;MAT.rock.userData.u.uMoss.value=bio==='desert'?0:bio==='widowmaker'?.4:bio==='alpine'?.18:1;
   dropPools(P.full);dropPools(P.lite);dropPools(P.liteS);dropPools(P.ground);
   set.forEach(k=>{const m=MAT[TREE_MAT_OF(k)];P.full.push(new Pool(geo(k),m,isMobile?160:260,true));P.liteS.push(new Pool(geo(k+'_l'),m,isMobile?400:700,true));P.lite.push(new Pool(geo(k+'_l'),m,isMobile?500:900,false));});
-  const gm=GROUND_BY[bio]||GROUND_BY.ridgeline;GROUND_KEYS.forEach(k=>{const [g,m]=gm[k];P.ground.push(new Pool(geo(g),MAT[m],GROUND_CAP[k],false));});
+  const gm=GROUND_BY[bio==='alpine'?'widowmaker':bio]||GROUND_BY.ridgeline;GROUND_KEYS.forEach(k=>{const [g,m]=gm[k];P.ground.push(new Pool(geo(g),MAT[m],GROUND_CAP[k],false));});
   T_SETGEO=performance.now()-t;bakeImpostors(set);T_BAKE=performance.now()-t-T_SETGEO;}
  else{for(const p of[...P.full,...P.lite,...P.liteS,...P.ground]){p.begin();p.end(0,0,0,1);}}
  for(const k in last)last[k].x=1e9;dirtyTrees=dirtyGround=dirtyProps=true;STAT.tiles=STAT.trees=STAT.props=STAT.genMs=STAT.gTiles=STAT.gGenMs=0;}

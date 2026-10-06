@@ -44,6 +44,19 @@ export const MOUNTAINS = [
     gx: k => 80 * Math.sin(k * .7 + 2.1) + 25 * Math.sin(k * 1.9) },
   { id: 'shoreline', name: 'Shoreline', sub: 'Rainforest · Raised wooden singletrack', grade: .31, macro: 26, ridge: 6, rock: [.25, .45], step: 1.6, cliffs: 0, forest: .3, treeline: [-40, 60], feat: .14, walks: 26, network: true, seed: 2,
     gx: k => 90 * Math.sin(k * .8 + 1.1) + 25 * Math.sin(k * 2.7) },
+  // Razorback: high-alpine big-mountain freeride on granite — slabs, a knife-edge crest and cliff faces, but no boulder
+  // fields: scattered rocks are kept off the lines (a few clusters under the cliffs). The main line is a designed corridor
+  // (see "Razorback" below): a granite roll-in off the summit, a 340 m knife-edge spine, two huge roll-off cliff drops,
+  // a 40° couloir, a canyon gap, a run of bermed S-turns, a 42° slab and a 38° fall-line plunge through the larches.
+  { id: 'razorback', name: 'Razorback', sub: 'High alpine · Knife-edge spine, cliff drops and a canyon gap', biome: 'alpine', grade: .5, macro: 60, ridge: 20, rock: [.28, .5], step: 5, terrace: .22, cliffs: 0, trailMax: 1.0, forest: .04, treeline: [480, 1300], feat: 0, walks: 0, network: false, seed: 5,
+    corridor: 'razorback', trails: [{ name: 'Razorback', main: true, w: 1.15, meander: 0 }, { name: 'Goat Track', w: .95, meander: .45, dx: -205 }, { name: 'Scree Run', w: .9, meander: .3, dx: 210 }],
+    gx: k => rzX(140 + (k - 1) * 205) },
+  // Hollowfell: a steep highland downhill venue. Open heather moor on top — big fast berms, two huge dirt jumps and a dirt
+  // step-down — then dark, wet conifer forest: loamy fall-line chutes, off-camber traverses, tight switchbacks with big catch
+  // berms, roots and compressions. Dirt, loam and grass underfoot; rock is rare. Jump line left, raw tech line right.
+  { id: 'hollowfell', name: 'Hollowfell', sub: 'Highland forest · Steep loam, roots and huge dirt jumps', biome: 'highland', grade: .5, fall: s => .4 * s + .2 * (s - 1400) * smooth(1100, 1700, s), macro: 45, ridge: 10, rock: [.32, .55], step: 3, terrace: .15, cliffs: 0, trailMax: 1.0, forest: .45, treeline: [620, 900], feat: 0, walks: 0, network: false, seed: 6,
+    corridor: 'hollowfell', trails: [{ name: 'Hollowfell', main: true, w: 1.1, meander: 0, bermX: 1.6, bermW: 2.4 }, { name: 'Air Line', w: 1.05, meander: .4, dx: -200, style: 'jump' }, { name: 'The Gnarl', w: .8, meander: .6, dx: 205, style: 'tech' }],
+    gx: k => rzX(140 + (k - 1) * 205) },
 ];
 for (const m of MOUNTAINS) m.biome = m.biome || m.id;
 export let MOUNTAIN = MOUNTAINS[0];
@@ -152,7 +165,7 @@ export function cliffAt(x, z) {                              // height (m) of th
 function rawHeight(x, z, clr) {
   const M = MOUNTAIN, s = -z, nx = x + OX, nz = z + OZ;
   const sEff = s < 2750 ? s : 2750 + 140 * Math.tanh((s - 2750) / 140);       // valley floor flattens out
-  let h = -M.grade * sEff;
+  let h = M.fall ? -M.fall(sEff) : -M.grade * sEff;                          // (a mountain may shape its long fall)
   if (s < -30) h += .004 * (s + 30) * (s + 30);                                // summit backside
   h += fbm(nx * .0022 + 3.1, nz * .0022 - 1.7, 4) * M.macro;                  // big hills and hollows
   h += Math.pow(1 - Math.min(1, Math.abs(fbm(nx * .0075 + 11, nz * .0075 + 5, 3) * 1.6)), 3) * M.ridge;   // spines and ridges
@@ -164,6 +177,7 @@ function rawHeight(x, z, clr) {
   if (rk > 0) { const st = M.step, hv = h / st, fl = Math.floor(hv), fr = hv - fl; h = lerp(h, (fl + smooth(.8, .98, fr)) * st, rk * .85 * (M.terrace ?? 1)); }
   if (M.cliffs) h += cliffs(x, z, clr);
   h += fbm(nx * .035, nz * .035, 3) * .8 * (1 - .6 * clr);                    // small undulations
+  if (RZ.on) h = rzShape(x, z, h);                                             // Razorback's designed line
   return h;
 }
 let START_H = 0;
@@ -184,7 +198,8 @@ export function startY() { return START_H; }
 export function forestAt(x, z) {
   const M = MOUNTAIN, s = -z;
   const n = fbm((x + OX) * .006 + 7, (z + OZ) * .006 + 3, 3) + M.forest;
-  return smooth(-.02, .16, n) * smooth(M.treeline[0], M.treeline[1], s) * (1 - clearAt(x, z)) * (1 - .75 * rockZone(x, z)) * (1 - smooth(560, 640, Math.abs(x)) * .5);
+  const f = smooth(-.02, .16, n) * smooth(M.treeline[0], M.treeline[1], s) * (1 - clearAt(x, z)) * (1 - .75 * rockZone(x, z)) * (1 - smooth(560, 640, Math.abs(x)) * .5);
+  return RZ.on && f > 0 ? f * (1 - rzRock(x, z)) : f;
 }
 export const aspenAt = (x, z) => MOUNTAIN.id === 'shoreline' ? 0 : smooth(.08, .22, fbm((x + OX) * .02 + 50, (z + OZ) * .02, 2));
 // surface weights for physics and the terrain shader: out = [dirt, grass, forestFloor, rock], summing to 1.
@@ -192,8 +207,10 @@ export const aspenAt = (x, z) => MOUNTAIN.id === 'shoreline' ? 0 : smooth(.08, .
 export function surfaceInto(x, z, ny, out) {
   const clr = padClear(x, z), TT = TRAILS.length ? trailAt(x, z) : null, trail = Math.max(lineDirt(x, z), TT ? TT.dirt : 0);
   const steep = 1 - smooth(.62, .8, ny);
-  const rk = Math.max(steep, rockZone(x, z) * smooth(.15, .55, .5 + noise2(x * .09, z * .09)) * (1 - clr)) * (1 - trail);
+  let rk = Math.max(steep, rockZone(x, z) * smooth(.15, .55, .5 + noise2(x * .09, z * .09)) * (1 - clr)) * (1 - trail);
+  if (RZ.on) rk = Math.max(rk, rzRock(x, z) * (1 - trail));
   let feat = 0; forFeatures(x, z, (f, u, v) => { if (featureProfile(f, u) > .02 || (u > -3 && u < f.len + 3)) feat = Math.max(feat, 1 - smooth(f.W, f.W + 2, Math.abs(v))); });
+  if (RZ.on) { const dz = rzDirt(x, z); if (dz > 0) { rk *= 1 - dz; feat = Math.max(feat, dz); } }   // built dirt jumps stay dirt, faces and all
   const patches = smooth(.22, .42, fbm(x * .03 + 21, z * .03 - 8, 3));
   let dirt = Math.max(feat, clr * .8, patches * .85 * (MOUNTAIN.id === 'shoreline' ? .3 : 1), trail) * (1 - rk * (1 - trail));
   const forest = forestAt(x, z) * (1 - rk) * (1 - dirt);
@@ -342,14 +359,15 @@ let noTrails = false;
 function rawAt(x, z) { noTrails = true; const h = heightAt(x, z); noTrails = false; return h; }
 function genTrail(wps, r, spec) {
   const pts = []; let x = wps[0].x, z = wps[0].z, ph = r() * 6;
-  for (let w = 1; w < wps.length; w++) {
+  if (spec.path) for (const q of spec.path) pts.push({ x: q.x, z: q.z, g: rawAt(q.x, q.z), garden: q.rz.roots || 0, roll: 0, rz: q.rz });   // a designed line
+  else for (let w = 1; w < wps.length; w++) {
     const B = wps[w]; let guard = 0;
     while (Math.hypot(B.x - x, B.z - z) > 1.2 && guard++ < 4000) {
       const left = Math.hypot(B.x - x, B.z - z), toward = Math.atan2(-(B.x - x), -(B.z - z));
       const hd = toward + spec.meander * Math.sin(pts.length * .045 + ph) * smooth(10, 70, left) + spec.meander * .4 * Math.sin(pts.length * .13 + ph * 2) * smooth(10, 40, left);
       x += -Math.sin(hd); z += -Math.cos(hd);
       if (Math.abs(x) > 540) x = Math.sign(x) * 540;
-      pts.push({ x, z, g: rawAt(x, z), garden: 0, roll: 0 });
+      pts.push(MOUNTAIN.corridor ? { x, z, g: rawAt(x, z), garden: 0, roll: 0, rz: RZ_OFF } : { x, z, g: rawAt(x, z), garden: 0, roll: 0 });
     }
   }
   const n = pts.length; if (n < 20) return null;
@@ -361,12 +379,27 @@ function genTrail(wps, r, spec) {
   { const g = MOUNTAIN.trailMax || 1, F = new Float32Array(n), Bk = new Float32Array(n);
     F[0] = ys[0]; for (let i = 1; i < n; i++) F[i] = Math.max(ys[i], F[i - 1] - g);
     Bk[n - 1] = ys[n - 1]; for (let i = n - 2; i >= 0; i--) Bk[i] = Math.min(ys[i], Bk[i + 1] + g);
+    if (spec.path) {   // designed sections are exact: the caps restart after each one instead of filling its drops
+      F[0] = ys[0]; for (let i = 1; i < n; i++) F[i] = pts[i].rz.fix > .5 ? ys[i] : Math.max(ys[i], F[i - 1] - g);
+      Bk[n - 1] = ys[n - 1]; for (let i = n - 2; i >= 0; i--) Bk[i] = pts[i].rz.fix > .5 ? ys[i] : Math.min(ys[i], Bk[i + 1] + g);
+    }
     for (let i = 0; i < n; i++) ys[i] = (F[i] + Bk[i]) / 2; }
   // features down the trail
   const off = new Float32Array(n);
   for (let k = 30 + Math.floor(r() * 30); k < n - 30; k += 38 + Math.floor(r() * 50)) {
     if (padClear(pts[k].x, pts[k].z) > 0) continue;
     const t = r();
+    if (spec.path) { let near = 0; for (let j = Math.max(0, k - 30); j < Math.min(n, k + 30); j++) near = Math.max(near, pts[j].rz.fix); if (near > 0) continue; }
+    if (spec.style === 'jump' && t < .7) {                     // jump line: dirt tabletops (kicker 1.3–2.1 m, 7–12 m deck, 9 m landing)
+      const hk = 1.3 + r() * .8, deck = 7 + Math.floor(r() * 6);
+      for (let j = k - 8; j < k + deck + 10; j++) { if (j < 0 || j >= n) continue; const a = j - k;
+        off[j] += a < 0 ? hk * smooth(-8, 0, a) : a < deck ? hk : hk * (1 - smooth(deck, deck + 10, a)); }
+      continue;
+    }
+    if (spec.style === 'tech' && t >= .42) {                   // tech line: roots instead of rolls and gardens, longer
+      const L = 20 + Math.floor(r() * 24); for (let j = k; j < Math.min(n, k + L); j++) pts[j].garden = Math.max(pts[j].garden, smooth(k, k + 3, j) * (1 - smooth(k + L - 3, k + L, j)));
+      continue;
+    }
     if (t < .42) {                                              // step-down drop
       const dh = 1.3 + r() * 1.9; pts[k].drop = dh;
       for (let j = k - 14; j < k + 20; j++) { if (j < 0 || j >= n) continue; off[j] += j < k ? dh * .5 * smooth(k - 14, k - 1, j) : -dh * .5 * (1 - smooth(k + 1, k + 20, j)); }
@@ -380,23 +413,27 @@ function genTrail(wps, r, spec) {
     }
   }
   for (let i = 0; i < n; i++) pts[i].y = ys[i] + off[i];
+  if (spec.path) for (let i = 0; i < n; i++) { const q = pts[i].rz; pts[i].y = lerp(pts[i].y, pts[i].g, q.fix); if (q.lip) pts[i].drop = q.lip; }
   // tangents, curvature → banked tread and berms
   for (let i = 0; i < n; i++) { const a = pts[Math.max(0, i - 1)], b = pts[Math.min(n - 1, i + 1)], L = Math.hypot(b.x - a.x, b.z - a.z) || 1; pts[i].tx = (b.x - a.x) / L; pts[i].tz = (b.z - a.z) / L; }
   for (let i = 0; i < n; i++) {
     const a = pts[Math.max(0, i - 4)], b = pts[Math.min(n - 1, i + 4)];
     const k = wrapPi(Math.atan2(-b.tx, -b.tz) - Math.atan2(-a.tx, -a.tz)) / 8;   // + = turning left
     pts[i].bank = clamp(k * 9, -.42, .42); pts[i].berm = clamp(Math.abs(k) * 28, 0, 1) * 1.1;
+    if (spec.path) { const f = 1 - pts[i].rz.fix; pts[i].bank *= f; pts[i].berm *= f; pts[i].bank += pts[i].rz.cam || 0; }
+    if (spec.bermX) pts[i].berm *= spec.bermX;   // big catch berms
   }
-  return { name: spec.name, main: !!spec.main, w: spec.w, pts };
+  return spec.bermW ? { name: spec.name, main: !!spec.main, w: spec.w, pts, bermW: spec.bermW } : { name: spec.name, main: !!spec.main, w: spec.w, pts };
 }
 const wrapPi = a => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a; };
 function buildTrails() {
   TRAILS.length = 0; TB.clear(); if (!MOUNTAIN.trails) return;
   COURSE.length = 0; const r = rng(5100 + MOUNTAIN.seed * 13);
-  for (const spec of MOUNTAIN.trails) {
+  for (let spec of MOUNTAIN.trails) {
     let wps;
     if (spec.main) wps = [{ x: START.x, z: START.z - 18 }, ...GATES.map(g => ({ x: g.x, z: g.z })), { x: FINISH.x, z: FINISH.z }];
     else { wps = [{ x: START.x + spec.dx * .25, z: START.z - 30 }]; for (let s = 220; s < 2800; s += 230) wps.push({ x: spec.dx + 60 * Math.sin(s / 300 + spec.dx), z: -s }); wps.push({ x: FINISH.x + spec.dx * .2, z: FINISH.z + 20 }); }
+    if (spec.main && RZ.on) spec = { ...spec, path: rzPath() };
     const T = genTrail(wps, r, spec); if (!T) continue;
     T.id = TRAILS.length; TRAILS.push(T);
     for (let i = 0; i < T.pts.length - 1; i++) { const a = T.pts[i], b = T.pts[i + 1]; addSeg(TB, Math.floor(a.x / SBC), Math.floor(a.z / SBC), Math.floor(b.x / SBC), Math.floor(b.z / SBC), [T.id, i]); }
@@ -413,12 +450,295 @@ export function trailAt(x, z) {
     bd = d; best = { T, a, b, u, lat: (-(x - a.x) * dz + (z - a.z) * dx) / Math.sqrt(L2) };
   });
   if (!best) return null;
+  if (best.a.rz) return rzTrail(best, x, z);
   const { T, a, b, u, lat } = best, w = T.w, al = Math.abs(lat);
   const y = lerp(a.y, b.y, u), bank = lerp(a.bank, b.bank, u), berm = lerp(a.berm, b.berm, u), garden = lerp(a.garden, b.garden, u), roll = Math.max(a.roll, b.roll);
   let tread = y + bank * lat - .07 * Math.exp(-(((al - .32) / .11) ** 2)) * (1 - garden);    // two tyre ruts
   if (garden > 0) tread += garden * (noise2(x * 1.9, z * 1.9) * .32 + noise2(x * 4.1, z * 4.1) * .12);
   if (lat * bank > 0) tread += berm * smooth(w * .5, w + 1, al);                             // berm wall on the outside
   return { tread, m: 1 - smooth(w + .5, w + 4.5, al), lat, w, dirt: 1 - smooth(w - .1, w + .7, al), rock: Math.max(garden, roll) * (1 - smooth(w, w + 1.5, al)), T };
+}
+
+// ───────────────────────── Razorback: a designed big-mountain line
+// Razorback's main line is a corridor down the mountain, x = rzX(s) at depth s = −z. Its long profile Y(s) is designed
+// section by section (RZ_PLANS) instead of following the noise terrain, and rawHeight reshapes the ground around it, so
+// physics, the terrain mesh, flora and the carved trail all agree automatically:
+//   h = natural + D(s)·W(lat)       D = Y − natural height on the centre line. W = 1 on the core, (1−t)² across the flanks
+//                                   (t = 0..1 over a width 2|D|/kMax): where the line runs above the hillside it stands up
+//                                   as a ridge (the spine), where it cuts below it sinks into a gully (the couloir), with the
+//                                   flanks steepest (kMax) right beside the line.
+//   h = lerp(h, Y, flat)            riding surfaces (crest, slabs, lips, landings) are clean planes, not noise.
+//   h += band(s + jitter)·taper     cliff drops and the canyon gap are "bands": exact long profiles across a limited width
+//                                   (a cliff band with ragged ends, a slot canyon that pinches out), built from ballistics.
+// Ballistics, in this game's physics: takeoff horizontal speed u, vertical u·(lip slope); g = 9.81; air drag 2.5 %/s;
+// a landing crashes when the normal impact speed vn > 10 m/s with assist (8.5 without), bottoms out above 6 (game.js's
+// two-tyre model, 2026-10-06). That model also means a lip must be CRISP — a near-vertical edge right after it — or the
+// body rides down a rounded edge on its rear tyre and leaves nose-down with the vertical speed gone.
+// A straight landing below a drop can't serve a range of speeds: the faster you go, the further you fly and the more
+// you fall, so vn grows with u (a 45° plane below a 6 m cliff: vn 8 at 6 m/s, 19 at 14 m/s = overshoot). A PROGRESSIVE
+// landing that steepens with distance, like a ski-jump hill, keeps vn almost constant: the further you fly, the steeper
+// the ground you meet. Numbers below come from tools/rz_design.mjs (same integration as the game; checked in-game by
+// tools/rz_launch.mjs, which fires the real bike off each feature).
+export const RZ = { on: false, bands: [], T: null, feats: [] };
+const RZ_OFF = { fix: 0, edge: 0, rk: 0, air: 0, lip: 0 };   // trail flags for Razorback's ordinary (alternative) trails
+const RZ_RES = 4, RZ_END = 2950, RZ_N = RZ_END * RZ_RES + 1, RZ_PRE = 6;
+// The line, top to bottom. s in metres down the fall line; g = grade along the line (descent per metre, tan of the angle).
+//  summit  raised flat summit block, D0 m above the hillside       slab   planar granite ridden straight down
+//  spine   knife-edge crest: ~2.6 m of tread, flanks to ~67°       run    explicit grade, sets the speed for what follows
+//  chute   walled couloir                                          huck   roll-off lip → cliff face → progressive landing
+//  gap     kicker → slot canyon → far rim → progressive landing    (between sections the line follows the hillside)
+// huck/gap fields: gin run-in grade · t0 lip slope (dy/dx, + = up) · H/fw cliff face height/width · G gap length ·
+//  depth slot depth · R far rim below the lip · b0→b1 landing angle (°) steepening over Lb m, then b1 for Ls m, then
+//  eased over Lt m to the run-out grade gout · K knuckle rounding (m) · ext [left, right] half-width of the band (m).
+// Plans per corridor mountain: base = the centre line's long bends [a1, k1, φ1, a2, k2, φ2] (x = a·sin(k·s + φ)),
+// wig = amplitude (m) of the small swings between features, plan = the sections.
+const RZ_PLANS = {};
+RZ_PLANS.razorback = { base: [38, .0042, .6, 14, .011, 2], wig: 7, plan: [
+  { k: 'summit', s0: 0, s1: 36, g: .08, D0: 24 },
+  { k: 'slab', s0: 40, s1: 98, g: .8, name: 'Summit Slab' },                 // 38.7° granite roll-in off the summit
+  { k: 'run', s0: 98, s1: 112, g: .42 },
+  { k: 'spine', s0: 112, s1: 450, g: .38, name: 'The Razorback' },           // 21° crest, 340 m long, rollers ±0.5 m
+  { k: 'run', s0: 450, s1: 464, g: .38 },
+  // Guillotine — the spine ends in a cliff. Lip rolls over to 24°; 6 m face; landing 40°→50° over 42 m, 12 m at 50°.
+  //  In game: vn 6.1–6.6 m/s for lip speeds 14–18 m/s (a bottom-out, well under the crash line); at 17 m/s: 27 m out,
+  //  29 m down, 1.6 s of air. Overshoot onto the run-out above ~22.5 m/s at the lip.
+  { k: 'huck', s0: 464, lip: 470, name: 'Guillotine', gin: .38, t0: -.45, H: 6, fw: 2.5, b0: 40, b1: 50, K: .5, Lb: 42, Ls: 12, Lt: 26, gout: .45, ext: [36, 44], skew: -.12 },
+  { k: 'chute', s0: 640, s1: 750, g: .84, name: 'The Couloir' },             // 40° between granite walls
+  { k: 'run', s0: 990, s1: 1054, g: .42 },
+  // The Slot — kicker to +8.5° with a 2 m straight lip, a 16 m slot canyon 22 m deep, far rim 4 m below the lip, landing
+  //  28°→48° over 45 m. In game: clean from ~15 m/s at the lip (vn 3.7–4.9, 22–40 m of flight, 1.5–2.3 s of air); at
+  //  12.8 m/s and below it cases the far rim. Overshoot above ~21 m/s.
+  { k: 'gap', s0: 1054, lip: 1060, name: 'The Slot', gin: .42, t0: .15, G: 16, depth: 22, R: 4, b0: 28, b1: 48, K: 3, Lb: 45, Ls: 15, Lt: 26, gout: .45, ext: [70, 80], skew: .3 },
+  { k: 'run', s0: 1440, s1: 1494, g: .30 },
+  // Cathedral — bigger: lip rolls to 27°, 10 m face; landing 42°→52° over 40 m. In game: vn 7.0–7.7 (a hard bottom-out,
+  //  survivable even without assist) for lip speeds 13–18 m/s; at 17 m/s: 36 m out, 44 m down, 2.2 s of air. Overshoot
+  //  above ~20.5 m/s, so the 30% run-in matters: come in hot and you fly past the steep face.
+  { k: 'huck', s0: 1494, lip: 1500, name: 'Cathedral', gin: .30, t0: -.5, H: 10, fw: 3, b0: 42, b1: 52, K: .5, Lb: 40, Ls: 12, Lt: 28, gout: .45, ext: [50, 42], skew: .15 },
+  // The Berms — linked S-turns swinging ±11 m across a 23° path grade: turn radius ≈ 21 m, banked to 23° by the trail's
+  //  berms, which hold ≈ 18 m/s (lateral grip μg·(1 + 0.6·bank) plus the bank's own lean); faster washes out wide.
+  { k: 'turns', s0: 1610, s1: 1850, g: .42, A: 11, lam: 95, name: 'The Berms' },
+  { k: 'slab', s0: 1885, s1: 1962, g: .9, name: 'Mirror Slab' },             // 42° polished slab — the one bare-rock run
+  // Fall Line — 38° straight down through the larches, then a flat bench: the compression at the bottom loads the
+  //  bike at v²·κ ≈ 2 g at 18 m/s (the bench rounds the 0.78 → 0.15 change over ~16 m).
+  { k: 'plunge', s0: 2180, s1: 2320, g: .78, name: 'Fall Line' },
+  { k: 'run', s0: 2320, s1: 2345, g: .15 },
+] };
+// Hollowfell. Grades are along the path. Jumps are built dirt: kicker (narrow), a natural gap between steep dirt faces, a
+// built landing whose face steepens with distance (same progressive idea as Razorback's drops, see rz_design.mjs).
+RZ_PLANS.hollowfell = { base: [44, .0037, 1.9, 16, .0105, .4], wig: 9, plan: [
+  { k: 'summit', s0: 0, s1: 36, g: .08, D0: 6 },
+  { k: 'run', s0: 40, s1: 110, g: .4 },
+  // Heather Berms — fast open moor: ±15 m swings, radius ≈ 38 m, banked: carries 20+ m/s
+  { k: 'turns', s0: 110, s1: 330, g: .33, A: 15, lam: 150, name: 'Heather Berms' },
+  { k: 'run', s0: 330, s1: 394, g: .30 },
+  { k: 'jump', s0: 394, lip: 400, name: 'The Big Double', gin: .30, t0: .2, G: 20, depth: 2.6, fg: .30, wn: .8, wf: 3, R: 5, b0: 22, b1: 36, K: 3, Lb: 30, Ls: 6, Lt: 18, gout: .32, ext: [3.4, 3.4], tap: 3.5, en: 0, jit: 0, rk: 0 },
+  { k: 'run', s0: 480, s1: 554, g: .32 },
+  { k: 'jump', s0: 554, lip: 560, name: 'Tabletop', gin: .32, t0: .25, G: 12, depth: .3, fg: .05, wn: .6, wf: .6, R: 1, b0: 20, b1: 37, K: 2, Lb: 34, Ls: 10, Lt: 18, gout: .34, ext: [3.6, 3.6], tap: 3.5, en: 0, jit: 0, rk: 0 },
+  { k: 'run', s0: 625, s1: 694, g: .36 },
+  { k: 'huck', s0: 694, lip: 700, name: 'Moor Drop', gin: .36, t0: -.3, H: 4, fw: 2, b0: 32, b1: 42, K: .5, Lb: 32, Ls: 8, Lt: 22, gout: .45, ext: [9, 11], tap: 12, en: 4, jit: .3, rk: 0 },
+  // each forest chute is entered over a 0.5-grade roll-in, so a rider at 17 m/s stays (just) on the ground over the
+  // crest (v²κ ≈ 0.5 g) instead of launching off it and landing at the bottom
+  { k: 'run', s0: 778, s1: 800, g: .5 },
+  { k: 'plunge', s0: 800, s1: 930, g: .72, km: .8, roots: .5, name: 'Into the Dark' },     // 36° into the trees
+  { k: 'run', s0: 930, s1: 950, g: .12 },                                                  // compression
+  { k: 'traverse', s0: 985, s1: 1105, g: .26, A: -45, cam: .22, name: 'Off-Camber' },
+  { k: 'turns', s0: 1135, s1: 1390, g: .28, A: 11, lam: 85, name: 'Switchbacks' },         // R ≈ 17 m, 1.8 m catch berms (slope ≈ 0.6)
+  { k: 'run', s0: 1408, s1: 1430, g: .5 },
+  { k: 'plunge', s0: 1430, s1: 1570, g: .8, km: .8, roots: .8, name: 'Root Chute' },         // 38.7°
+  { k: 'run', s0: 1570, s1: 1590, g: .12 },
+  { k: 'traverse', s0: 1625, s1: 1745, g: .26, A: 40, cam: .22 },
+  { k: 'run', s0: 1783, s1: 1805, g: .5 },
+  { k: 'plunge', s0: 1805, s1: 1935, g: .76, km: .8, roots: .5, name: 'Black Chute' },
+  { k: 'run', s0: 1935, s1: 1955, g: .15 },
+  { k: 'turns', s0: 2000, s1: 2250, g: .48, A: 10, lam: 90, name: 'Steep Berms' },
+  { k: 'run', s0: 2280, s1: 2314, g: .42 },
+  { k: 'huck', s0: 2314, lip: 2320, name: 'Root Drop', gin: .42, t0: -.32, H: 3, fw: 1.5, b0: 30, b1: 40, K: .5, Lb: 26, Ls: 6, Lt: 20, gout: .45, ext: [6, 7], tap: 8, en: 3, jit: .2, rk: 0 },
+  { k: 'run', s0: 2418, s1: 2440, g: .5 },
+  { k: 'plunge', s0: 2440, s1: 2560, g: .7, km: .8, roots: .6, name: 'Final Plunge' },
+  { k: 'run', s0: 2560, s1: 2580, g: .1 },
+] };
+let RZC = null, RZP = [];   // the current mountain's corridor (set by setMountain)
+const rzBand = f => f.k === 'huck' || f.k === 'gap' || f.k === 'jump';   // kinds built as exact bands
+// zone of a huck/gap/jump along the path: [lip − RZ_PRE, end]
+const rzLen = f => RZ_PRE + (f.k === 'huck' ? f.fw : f.G) + f.Lb + f.Ls + f.Lt;
+const rzEndS = f => rzBand(f) ? f.lip - RZ_PRE + rzLen(f) * 1.05 : f.s1;
+// 0..1: how strongly the line is held straight (features and their run-ins)
+function rzStraight(s) { let w = 0; for (const f of RZP) { if (f.k === 'summit') continue; w = Math.max(w, smooth(f.s0 - 40, f.s0 - 5, s) * (1 - smooth(rzEndS(f) + 5, rzEndS(f) + 40, s))); } return w; }
+const rzBase = s => { const b = RZC.base; return b[0] * Math.sin(s * b[1] + b[2]) + b[3] * Math.sin(s * b[4] + b[5]); };
+// turns swing the line side to side; a traverse carries it A metres across the hill (and it stays there)
+function rzTurns(s) { let x = 0; for (const f of RZP) { if (f.k === 'turns' && s > f.s0 && s < f.s1) x += f.A * Math.sin((s - f.s0) * 2 * Math.PI / f.lam) * smooth(f.s0, f.s0 + 25, s) * (1 - smooth(f.s1 - 25, f.s1, s)); else if (f.k === 'traverse' && s > f.s0) x += f.A * smooth(f.s0, f.s1, s); } return x; }
+function rzX0(s) { return rzBase(s) - rzBase(0) * (1 - smooth(0, 160, s)) + RZC.wig * Math.sin(s * .04 + 1.3) * (1 - rzStraight(s)) * smooth(120, 220, s) + rzTurns(s); }
+// centre line x at depth s; it bends gently (R > 400 m) through the features and swings through berms between them,
+// and ends on the finish
+export function rzX(s) { const fin = Math.round(Math.round(rzX0(2600)) * .4); return lerp(rzX0(s), fin, smooth(2600, 2885, s)); }
+function rzAlloc() { const A = () => new Float64Array(RZ_N); return { cx: A(), cc: A(), Y: A(), D: A(), wc: A(), km: A(), fa: A(), fw: A(), cv: A(), rk: A(), edge: A(), fix: A(), air: A(), lip: A(), cam: A(), roots: A(), dz: A() }; }
+// exact long profile of a huck or gap along the path, from RZ_PRE m before the lip: heights (m) at 1/RZ_RES m steps
+function rzProfile(f) {
+  const n = Math.round(rzLen(f) * RZ_RES), E = new Float64Array(n + 1), nar = new Float64Array(n + 1), D2R = Math.PI / 180;
+  const land = f.k === 'huck' ? f.fw : f.G, K = f.K || .5;
+  for (let i = 0; i < n; i++) {
+    const x = (i + .5) / RZ_RES; let d;   // descent per metre over this step
+    // lip roll / kicker: the transition, then a straight lip held at the takeoff angle t0 (the last 1.5–2 m), so the
+    // bike leaves at t0 rather than at whatever the curve happens to be doing at the edge
+    if (x < RZ_PRE) d = f.k === 'huck' ? f.gin + (-f.t0 - f.gin) * smooth(RZ_PRE - 5, RZ_PRE - 1.5, x) : f.gin + (-f.t0 - f.gin) * smooth(0, 4, x);
+    // gap: near wall (wn m), floor (falling fg per m: 0 = a level slot, = the run-in grade for a double's natural gap,
+    // ≈ lip level for a tabletop's deck), far wall (wf m) up to the landing knuckle R below the lip
+    else if (x < RZ_PRE + land) { const a = x - RZ_PRE, wn = f.wn ?? 1.5, wf = f.wf ?? 2, fg = f.fg ?? 0; d = f.k === 'huck' ? f.H / f.fw : a < wn ? f.depth / wn : a < f.G - wf ? fg : -(f.depth + fg * (f.G - wn - wf) - f.R) / wf; }
+    else {
+      const a = x - RZ_PRE - land; let b;
+      if (a < K) b = f.b0 * a / K; else if (a < f.Lb) b = f.b0 + (f.b1 - f.b0) * (a - K) / (f.Lb - K); else if (a < f.Lb + f.Ls) b = f.b1;
+      else b = lerp(f.b1, Math.atan(f.gout) / D2R, smooth(0, 1, (a - f.Lb - f.Ls) / f.Lt));
+      d = Math.tan(b * D2R);
+    }
+    E[i + 1] = E[i] - d / RZ_RES;
+    if (f.k !== 'huck' && x < RZ_PRE) nar[i + 1] = nar[i] + (f.gin - d) / RZ_RES;   // the kicker's bump over the run-in line
+  }
+  if (f.k !== 'huck') {   // the kicker is a narrow built ramp; its bump fades out down the near wall of the slot
+    const i6 = Math.round(RZ_PRE * RZ_RES), k6 = nar[i6];
+    for (let i = i6 + 1; i <= n; i++) nar[i] = k6 * Math.max(0, 1 - (i - i6) / RZ_RES / (f.wn ?? 1.5));
+  }
+  return { E, nar, n, airA: RZ_PRE, airB: RZ_PRE + land + K };
+}
+function buildCorridor() {
+  RZ.on = false; RZ.bands = []; RZ.feats = [];
+  if (!MOUNTAIN.corridor) return;
+  const T = RZ.T || (RZ.T = rzAlloc()), N = RZ_N, R = RZ_RES;
+  for (let i = 0; i < N; i++) T.cx[i] = rzX(i / R);
+  for (let i = 0; i < N; i++) { const a = Math.max(0, i - 4), b = Math.min(N - 1, i + 4), d = (T.cx[b] - T.cx[a]) * R / (b - a); T.cc[i] = 1 / Math.sqrt(1 + d * d); }
+  // the natural ground along the line (and a ±40 m smoothed copy to steer by)
+  const Yn = new Float64Array(N), Ys = new Float64Array(N), P = new Float64Array(N + 1);
+  for (let i = 0; i < N; i++) { const x = T.cx[i], z = -i / R; Yn[i] = rawHeight(x, z, padClear(x, z)); P[i + 1] = P[i] + Yn[i]; }
+  for (let i = 0; i < N; i++) { const a = Math.max(0, i - 160), b = Math.min(N - 1, i + 160); Ys[i] = (P[b + 1] - P[a]) / (b - a + 1); }
+  // paint the plan: grade (NaN = follow the hillside), lateral shape and trail flags
+  const G = new Float64Array(N).fill(NaN), EX = new Uint8Array(N);
+  T.wc.fill(6); T.km.fill(1); T.fa.fill(0); T.fw.fill(8); T.cv.fill(0); T.rk.fill(0); T.edge.fill(0); T.fix.fill(0); T.air.fill(0); T.lip.fill(0); T.cam.fill(0); T.roots.fill(0); T.dz.fill(0);
+  const idx = s => clamp(Math.round(s * R), 0, N - 1);
+  const paint = (s0, s1, fn) => { for (let i = idx(s0); i <= idx(s1); i++) fn(i, i / R); };
+  for (const f of RZP) {
+    if (rzBand(f)) {
+      const pr = rzProfile(f), i0 = idx(f.lip - RZ_PRE), cc = T.cc[idx(f.lip)], dLen = pr.n / R * cc;   // depth span of the zone
+      const i1 = idx(f.lip - RZ_PRE + dLen), Etot = pr.E[pr.n], wide = new Float64Array(i1 - i0 + 1), nar = new Float64Array(i1 - i0 + 1);
+      for (let i = i0; i <= i1; i++) {
+        const xp = (i - i0) / R / cc * R, j = Math.min(pr.n - 1, Math.floor(xp)), u = Math.min(1, xp - j);
+        const e = lerp(pr.E[j], pr.E[j + 1], u), q = lerp(pr.nar[j], pr.nar[j + 1], u), lin = Etot * (i - i0) / (i1 - i0);
+        wide[i - i0] = e - q - lin; nar[i - i0] = q;
+        G[i] = -Etot / ((i1 - i0) / R); EX[i] = 1;
+        const xs = xp / R; T.wc[i] = 7; T.km[i] = 1.25; T.fa[i] = 1; T.fw[i] = 9; T.rk[i] = f.rk ?? .3; T.fix[i] = 1; if (f.rk === 0) T.dz[i] = 1;   // rocky lips (dirt jumps: rk 0); faces are rock by steepness
+        // air 1: lip, face, slot — no tread, no trail dirt. air .5: the kicker / lip roll — exact ground (a 1 m tread
+        // polyline would flatten the lip angle: its chord across the kicker's last metre is ~half the lip slope), dirt kept
+        T.air[i] = xs > pr.airA - .2 && xs < pr.airB ? 1 : xs < pr.airA ? .5 : 0;
+        if (Math.abs(xs - RZ_PRE) < .6 / R) T.lip[i] = f.k === 'huck' ? f.H : f.depth;
+      }
+      // tap: width (m) over which the band fades out sideways; en: noise on that edge; jit: ragged-rim amount (0 for built jumps)
+      RZ.bands.push({ id: RZ.bands.length + 1, skew: f.skew || 0, f, s0: i0 / R, n: i1 - i0 + 1, w: wide, nw: nar, extL: f.ext[0], extR: f.ext[1], gap: f.k !== 'huck', tap: f.tap ?? 40, en: f.en ?? 14, jit: f.jit ?? 1 });
+      RZ.feats.push({ name: f.name, k: f.k, lip: f.lip, x: T.cx[idx(f.lip)], end: i1 / R });
+      continue;
+    }
+    paint(f.s0, f.s1, (i, s) => {
+      const cc = T.cc[i];
+      if (f.k === 'spine') G[i] = (f.g + .1 * Math.sin((s - f.s0) * 2 * Math.PI / 30) * smooth(f.s0, f.s0 + 30, s) * (1 - smooth(f.s1 - 30, f.s1, s))) / cc;
+      else G[i] = f.g / cc;
+      T.fix[i] = f.k === 'summit' || f.k === 'turns' || f.k === 'traverse' ? 0 : 1;
+      if (f.roots) T.roots[i] = f.roots;
+      if (f.k === 'traverse') { T.cam[i] = f.cam || 0; T.fa[i] = .25; T.fw[i] = 4; }
+      if (f.k === 'summit') { T.wc[i] = 34; T.km[i] = 1.2; }
+      else if (f.k === 'slab') { T.wc[i] = 10; T.km[i] = 1.4; T.fa[i] = 1; T.fw[i] = 8; T.cv[i] = -.003; T.rk[i] = 1; }
+      else if (f.k === 'plunge') { T.wc[i] = 6; T.km[i] = f.km ?? 1.3; T.fa[i] = .6; T.fw[i] = 5; }       // dirt, the hillside's texture kept
+      else if (f.k === 'spine') { T.wc[i] = 1.5; T.km[i] = 2.4; T.fa[i] = 1; T.fw[i] = .6; T.rk[i] = .55; T.edge[i] = 1; }   // granite crest
+      else if (f.k === 'chute') { T.wc[i] = 5; T.km[i] = 2.2; T.fa[i] = .7; T.fw[i] = 3; T.rk[i] = .2; }                     // scree floor
+    });
+    if (f.name) RZ.feats.push({ name: f.name, k: f.k, s0: f.s0, s1: f.s1 });
+  }
+  // off-camber traverses: the tread tilts the way the hillside falls (up to cam), so the bike wants to slide off downhill
+  for (let i = 0; i < N; i++) if (T.cam[i] > 0) { const x = T.cx[i], z = -i / R, gl = (rawHeight(x + 2, z, 0) - rawHeight(x - 2, z, 0)) / 4 / T.cc[i]; T.cam[i] = clamp(gl, -T.cam[i], T.cam[i]); }
+  // integrate the profile. Pass 1: follow the plan; between sections steer D back toward 0 over ~90 m, grade 0.18–0.85.
+  const Y = T.Y, g = new Float64Array(N), D0 = RZP[0].D0;
+  Y[0] = Yn[0] + D0;
+  for (let i = 0; i < N - 1; i++) {
+    g[i] = G[i] === G[i] ? G[i] : clamp(-(Ys[i + 1] - Ys[i]) * R + (Y[i] - Ys[i]) / 90, .18, .85);
+    Y[i + 1] = Y[i] - g[i] / R;
+  }
+  // pass 2: smooth the grade over ±8 m (convex roll-overs into the slabs and the couloir, no kinks), but leave the huck and
+  // gap zones exact; next to them the smoothing sees their entry/exit grades so their run-ins and run-outs stay true
+  const gs = new Float64Array(N), H8 = 8 * R;
+  for (let i = 0; i < N; i++) {
+    if (EX[i]) { gs[i] = g[i]; continue; }
+    let a = 0, c = 0;
+    for (let j = Math.max(0, i - H8); j <= Math.min(N - 2, i + H8); j++) {
+      let v = g[j];
+      if (EX[j]) { const b = RZ.bands.find(b => j >= b.s0 * R - 1 && j < b.s0 * R + b.n + 1); v = j < i ? b.f.gout : b.f.gin; }
+      a += v; c++;
+    }
+    gs[i] = a / c;
+  }
+  for (let i = 0; i < N - 1; i++) Y[i + 1] = Y[i] - gs[i] / R;
+  for (let i = 0; i < N; i++) T.D[i] = Y[i] - Yn[i];
+  // ease the lateral shape along the line (±10 m) so the flanks never change abruptly
+  for (const k of ['wc', 'km', 'fa', 'fw', 'rk', 'edge', 'cv']) { const A = T[k], B = Float64Array.from(A), W = 10 * R;
+    for (let i = 0; i < N; i++) { let a = 0, c = 0; for (let j = Math.max(0, i - W); j <= Math.min(N - 1, i + W); j += 2) { a += B[j]; c++; } A[i] = a / c; } }
+  { const B = Float64Array.from(T.fix), W = 6 * R; for (let i = 0; i < N; i++) { let m = B[i]; for (let j = Math.max(0, i - W); j <= Math.min(N - 1, i + W); j++) m = Math.max(m, B[j] * (1 - Math.abs(j - i) / W)); T.fix[i] = m; } }
+  RZ.on = true;
+}
+// lateral position (m, + = right looking downhill... sign only matters for the band ends) and table lookups at depth s
+function rzAt(x, z) {
+  const T = RZ.T, s = -z; if (s > RZ_END - 1) return null;
+  const f = Math.max(0, s) * RZ_RES, i = Math.min(RZ_N - 2, f | 0), u = f - i;
+  const L = A => A[i] + (A[i + 1] - A[i]) * u;
+  return { s, L, lat: (x - L(T.cx)) * L(T.cc), lw: s < 0 ? smooth(-90, 0, s) : 1 - smooth(RZ_END - 80, RZ_END - 1, s) };
+}
+function rzShape(x, z, h) {
+  const q = rzAt(x, z); if (!q || q.lw <= 0) return h;
+  const T = RZ.T, { L, lat, lw, s } = q, al = Math.abs(lat);
+  // flanks: wander in and out along the line (never on the knife-edge itself) so ridges and gullies read as rock, not
+  // embankments; crags and buttresses on the flank faces scale with their height
+  const D = L(T.D) * lw, ed = L(T.edge), sd = lat < 0 ? 7.3 : 2.1, wob = 1 - ed * .85;
+  const wc = L(T.wc) + wob * (4 * noise2(s * .035, sd) + 1.5 * noise2(s * .13, sd + 4)) * smooth(2, 6, L(T.wc));
+  const len = Math.max(8, 2 * Math.abs(D) / L(T.km)) * (1 + .5 * wob * noise2(s * .022 + 3, sd + 9)), t = clamp((al - Math.max(0, wc)) / len, 0, 1);
+  h += D * (1 - t) * (1 - t);
+  if (t > 0 && t < 1) h += Math.abs(D) * t * (1 - t) * (.5 * noise2(x * .085 + 5, z * .085) + .25 * noise2(x * .21, z * .21 + 3));
+  const fa = L(T.fa) * lw; if (fa > 0) { const k = fa * (1 - smooth(wc, wc + L(T.fw), al)); if (k > 0) h = lerp(h, L(T.Y) + L(T.cv) * lat * lat, k); }
+  for (const b of RZ.bands) {
+    const ds = s - b.s0; if (ds < -45 || ds > b.n / RZ_RES + 45) continue;
+    // away from the riding line (exact within ±3.5 m) the rim wanders and runs off diagonally: a sinuous slot, a ragged band
+    const jit = (9 * noise2(lat * .028 + b.id * 13.1, b.id * 2.3) + 2 * noise2(lat * .15, b.id * 5.7) + b.skew * lat) * smooth(3.5, 26, al) * b.jit;
+    const e = (ds + jit) * RZ_RES; if (e < 0 || e >= b.n - 1) continue;
+    const j = e | 0, v = e - j, ext = lat < 0 ? b.extL : b.extR;
+    const tw = 1 - smooth(ext, ext + b.tap, al + b.en * noise2(s * .03 + b.id * 5.3, lat > 0 ? 3.7 : 9.1));
+    if (tw > 0) h += (b.w[j] + (b.w[j + 1] - b.w[j]) * v) * tw;
+    if (b.gap && al < 4.2) h += (b.nw[j] + (b.nw[j + 1] - b.nw[j]) * v) * (1 - smooth(2.6, 4.2, al));
+  }
+  return h;
+}
+// the main line as 1 m steps along the centre line, start to finish, each carrying its trail flags from the tables:
+// fix (tread = exact ground, no smoothing), edge (tight blend: the knife-edge), rk (bare rock tread), air (no tread at all:
+// lips, faces and the slot keep the exact analytic ground), lip (a drop: braking bumps before it)
+function rzPath() {
+  const T = RZ.T, out = []; let s = 18, ip = 0;
+  while (s < 2900) {
+    const f = s * RZ_RES, i = Math.min(RZ_N - 2, f | 0), u = f - i, L = A => A[i] + (A[i + 1] - A[i]) * u;
+    let lip = 0; for (let j = ip; j <= i + 1; j++) lip = Math.max(lip, T.lip[j]); ip = i + 2;
+    out.push({ x: L(T.cx), z: -s, rz: { fix: L(T.fix), edge: L(T.edge), rk: L(T.rk), air: Math.max(T.air[i], T.air[i + 1]), lip, cam: L(T.cam), roots: L(T.roots) } });
+    s += L(T.cc);
+  }
+  out.push({ x: FINISH.x, z: FINISH.z, rz: { fix: 0, edge: 0, rk: 0, air: 0, lip: 0 } });
+  return out;
+}
+// built dirt (0..1): the kicker, decks, faces and landings of a 'jump', and a dirt huck's lip and landing
+function rzDirt(x, z) { const q = rzAt(x, z); if (!q) return 0; const T = RZ.T, d = q.L(T.dz); return d > 0 ? d * (1 - smooth(5, 9, Math.abs(q.lat))) * q.lw : 0; }
+// bare granite on Razorback's slabs, crest and lips (0..1)
+function rzRock(x, z) { const q = rzAt(x, z); if (!q) return 0; const T = RZ.T, wc = q.L(T.wc); return q.L(T.rk) * (1 - smooth(wc + 2, wc + 7, Math.abs(q.lat))) * q.lw; }
+
+// trail cross-section on Razorback's designed line: as trailAt, plus the knife-edge's tight blend, bare-rock treads (no ruts
+// on granite) and "air" stretches (lip, face, slot) where the tread steps aside and the exact ground is ridden
+function rzTrail({ T, a, b, u, lat }, x, z) {
+  const w = T.w, al = Math.abs(lat), A = a.rz, B = b.rz, air = Math.max(A.air, B.air), edge = lerp(A.edge, B.edge, u), rk = lerp(A.rk, B.rk, u);
+  const y = lerp(a.y, b.y, u), bank = lerp(a.bank, b.bank, u), berm = lerp(a.berm, b.berm, u), garden = lerp(a.garden, b.garden, u), roll = Math.max(a.roll, b.roll);
+  let tread = y + bank * lat - .07 * Math.exp(-(((al - .32) / .11) ** 2)) * (1 - garden) * (1 - rk);
+  if (garden > 0) tread += garden * (noise2(x * 2.7, z * 2.7) * .13 + noise2(x * 5.9, z * 5.9) * .06);   // roots and loam chatter, not boulders
+  if (lat * bank > 0) tread += berm * smooth(w * .5, w + (T.bermW || 1), al);   // bermW: a wider, rideable catch-berm wall
+  const m = air > .25 ? 0 : lerp(1 - smooth(w + .5, w + 4.5, al), 1 - smooth(w + .15, w + 1.1, al), edge);
+  // Razorback has no rock gardens or rock rolls: its "gardens" are root-and-loam chatter, its rolls steep dirt
+  return { tread, m, lat, w, dirt: air > .75 ? 0 : (1 - smooth(w - .1, w + .7, al)) * (1 - rk * .85), rock: rk * (1 - smooth(w, w + 1.5, al)) * (air > .75 ? 0 : 1), T };
 }
 
 // ───────────────────────── skinnies: a balance course of narrow raised planks near the start
@@ -489,8 +809,10 @@ function buildBalance() {
 // Call setMountain(id) (also inside workers) before using anything above. Deterministic per mountain.
 export function setMountain(id) {
   MOUNTAIN = MOUNTAINS.find(m => m.id === id) || MOUNTAINS[0];
+  RZC = MOUNTAIN.corridor ? RZ_PLANS[MOUNTAIN.corridor] : null; RZP = RZC ? RZC.plan : [];
   OX = MOUNTAIN.seed * 1013.7; OZ = MOUNTAIN.seed * -733.1;
   buildCourse(); STRUCTS.length = 0; LINES.length = 0; SB.clear(); LB.clear(); TRAILS.length = 0; TB.clear();
+  buildCorridor();
   START_H = rawHeight(START.x, START.z, 1);
   buildTrails();
   buildStructures();
