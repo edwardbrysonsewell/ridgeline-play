@@ -242,7 +242,7 @@ function step(dt){
   // At walking pace the bars steer directly instead.
   const v=vs,LEAN_MAX=.85,dmax=lerp(.55,.11,clamp(v/18,0,1));
   let leanT=-steer*LEAN_MAX,delta=-steer*dmax;
-  if(assist&&state==='ride'){const A=assistSteer(v,F,Rv);if(A.w){const w=A.w*(Math.abs(steer)>.08?(A.deck?.6:.3):1);
+  if(assist&&state==='ride'){const A=assistSteer(v,F,Rv);if(A.w){const w=A.w*(1-(A.deck?.4:.7)*smooth(.03,.25,Math.abs(steer)));   // eases off as you steer, no snap
    leanT=lerp(leanT,clamp(Math.atan(A.om*v/G),-LEAN_MAX,LEAN_MAX),w);delta=lerp(delta,clamp(Math.atan(A.om*WB/Math.max(v,.5)),-dmax,dmax),w);}}
   if(state==='finish'){leanT=0;delta=0;}
   // balance: on a narrow plank the bike's heading wanders (an unstable drift, calmer with speed); you correct it
@@ -507,7 +507,10 @@ function hopDown(){if(state!=='ride')return;input.hopHeld=true;input.hopAir=!P.g
 function hopUp(){if(!input.hopHeld)return;input.hopHeld=false;input.hopAir=false;$('hop').classList.remove('on');if(state==='ride'&&P.ground){input.hopCharge=clamp(input.hopT/.35,0,1);input.hop=true;}}
 $('viewBtn').addEventListener('click',()=>setView(view==='helmet'?'chase':'helmet'));
 // steering sensitivity 1 (calm) … 5 (twitchy): thumb travel, response curve, input smoothing, lean spring
-const SENS_T=[{r:.30,e:2.0,d:5,k:45,c:12.7},{r:.24,e:1.8,d:6.5,k:55,c:14},{r:.19,e:1.6,d:8,k:70,c:15.9},{r:.15,e:1.4,d:10,k:85,c:17.5},{r:.12,e:1.25,d:12,k:95,c:18.5}];
+// 10-06 (Bryson: "slow to respond, but then twitchy"): less input smoothing and a quicker, well-damped lean (63 % of
+// the lean in ~0.23 s on Smooth, was 0.43 s, no overshoot); gentler response curves (a steep curve is dead near centre
+// and then lurches)
+const SENS_T=[{r:.30,e:1.4,d:18,k:70,c:15},{r:.24,e:1.25,d:25,k:100,c:18},{r:.19,e:1.15,d:30,k:130,c:20.5},{r:.15,e:1.05,d:36,k:160,c:22.8},{r:.12,e:1,d:42,k:190,c:24.8}];
 let sens=clamp(+(store.get('sens')||2),1,5);const SENS=()=>SENS_T[sens-1];
 const SENS_NAMES=['Calm','Smooth','Medium','Quick','Twitchy'];
 const syncSens=v=>{sens=v;store.set('sens',v);for(const id of['sens','sens2']){$(id).value=v;$(id+'Val').textContent=SENS_NAMES[v-1];}};
@@ -528,7 +531,7 @@ function tiltFromUp(x,y,z){tilt.got=true;
  const r=Math.atan2(-x,Math.hypot(y,z))/D2R,p=Math.atan2(z,y)/D2R;   // roll (+ = right side down), pitch (+ = top edge away)
  if(tilt.cal){tilt.r0=r;tilt.p0=p;}
  const S=SENS();let d=r-tilt.r0;if(Math.abs(d)<2)d=0;else d-=Math.sign(d)*2;const full=lerp(30,16,(sens-1)/4);const xr=clamp(d/full,-1,1);
- tilt.val=Math.sign(xr)*Math.pow(Math.abs(xr),S.e*.75);
+ tilt.val=xr;   // linear: the bike leans in proportion to the phone
  let f=((p-tilt.p0+540)%360)-180;if(Math.abs(f)<4)f=0;else f-=Math.sign(f)*4;const xf=clamp(f/20,-1,1);tilt.fwd=Math.sign(xf)*Math.pow(Math.abs(xf),1.3);}
 // the screen's rotation from the phone's portrait orientation, counter-clockwise in degrees (Apple's window.orientation)
 function screenAngle(){const a=typeof window.orientation==='number'?window.orientation:(screen.orientation&&screen.orientation.angle)||0;return ((a%360)+360)%360;}
