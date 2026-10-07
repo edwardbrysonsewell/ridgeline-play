@@ -83,8 +83,8 @@ function styleGates(){gateMeshes.forEach((g,k)=>{const race=mode==='race';g.visi
 const G=9.81,WB=1.3;   // suspension (220 mm each end, the rider on his legs) lives in suspension.js
 let SS=makeSusp();
 // a bump under the front wheel now and under the rear a wheelbase later (ring buffer of physics steps at 120 Hz)
-function suspKick(f,r,v){P.kF+=f;const n=Math.min(150,Math.round(WB/Math.max(v,2)*120));P.bq[(P.bi+n)%P.bq.length]+=r;}
-const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:SAG_F,sR:SAG_R,kF:0,kR:0,load:1,legs:0,bp:0,bpw:0,frontFree:false,airW:0,sFV:0,sRV:0,bq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
+function suspKick(f,r,v,d=0){const n=Math.min(150,Math.round(WB/Math.max(v,2)*120));if(d)P.fq[(P.bi+d)%P.fq.length]+=f;else P.kF+=f;P.bq[(P.bi+n+d)%P.bq.length]+=r;}
+const P={x:0,y:0,z:0,vx:0,vy:0,vz:0,th:0,ground:true,air:0,whip:0,whipMax:0,pitch:0,roll:0,lean:0,leanV:0,airPitch:0,airOff:0,airOffV:0,slideT:0,steerA:0,susp:0,suspV:0,sF:SAG_F,sR:SAG_R,kF:0,kR:0,load:1,legs:0,bp:0,bpw:0,frontFree:false,airW:0,sFV:0,sRV:0,bq:new Float32Array(160),fq:new Float32Array(160),bi:0,crank:0,wheel:0,skid:0,brake:0,spd:0,rough:0,pedal:false,om:0,dist:0};
 const SW=[0,1,0,0];
 const input={steer:0,steerT:0,brake:0,btnBrake:0,lean:0,hop:false,hopHeld:false,hopT:0,hopCharge:0,brakeHeld:false,keyL:0,keyR:0};
 const DEV={fullAssist:false,log:null};
@@ -100,7 +100,7 @@ const crashBodies=[];const crumbs=[];let crumbT=0;
 // you come down onto. A deck edge between 15 cm and head height in front of you is something you hit.
 function surf(x,z){const g=heightAt(x,z),d=deckAt(x,z,P.y-(P.ground?.2:0));return d&&d.y>g?d.y:g;}
 function deckSide(x,z){const d=deckAt(x,z,P.y+1.4);return d&&d.y>P.y+.3&&d.y>heightAt(x,z)+.1?d:null;}
-function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;SS=makeSusp();P.sF=SAG_F;P.sR=SAG_R;P.sFV=P.sRV=0;P.kF=P.kR=0;P.wOK=false;P.bq.fill(0);
+function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;SS=makeSusp();P.sF=SAG_F;P.sR=SAG_R;P.sFV=P.sRV=0;P.kF=P.kR=0;P.wOK=false;P.bq.fill(0);P.fq.fill(0);
  reattachRider();crashBodies.length=0;setFirstPerson(view==='helmet');fp.yaw=P.th;}
 function startRun(m){if(m)mode=m;if(typeof tilt!=='undefined')tilt.cal=true;store.set('mode',mode);
  if(mode==='skinny'&&CORE.BALANCE.start){const b=CORE.BALANCE.start;placeRider(b.x,b.z,b.th);SK.sec=-1;SK.dabs=0;SK.offT=0;SK.onSec=-1;SK.done=false;}else placeRider(START.x,START.z-1,0);runT=0;gateIdx=0;splits=[];crashes=0;topSpd=0;airTotal=0;style=0;P.dist=0;crumbs.length=0;
@@ -227,7 +227,13 @@ function step(dt){
   const dk=deckAt(P.x,P.z,P.y);if(dk)P.lastLat=dk.lat;P.deck=dk&&Math.abs(P.y-dk.y)<.25&&dk.y>heightAt(P.x,P.z)-.05?dk:null;
   surfaceInto(P.x,P.z,1/Math.hypot(gF,1,gR),SW);const feel=P.deck?WOOD_FEEL:rideFeel(SW);P.rough=feel.rough;
   // the suspension working over roots and stones: small random kicks scaled by speed
-  {const vv=Math.abs(P.vx*F.x+P.vz*F.z),kick=(Math.random()-.5)*feel.rough*Math.min(1,vv/12)*.75;suspKick(kick,kick,vv);}
+  // rocks, roots and braking bumps under the tyres: each drives the wheel up at ~v·height/half-length, then lets it
+  // back down past the top, the rear a wheelbase after the front (World Cup data: square-edge hits 3–6 m/s at the
+  // wheel; braking bumps 5–15 Hz before corners). Plus a fine chatter.
+  {const vv=Math.abs(P.vx*F.x+P.vz*F.z),rough=P.deck?.1:.3+.7*feel.rough,bb=brake>.25&&!P.deck&&vv>4?brake:0;
+   if((P.clock||0)-(P.lastLandT??-9)>.25&&Math.random()<vv*(rough*.9+bb*.8)*dt){const r=Math.random(),hgt=(.03+r*r*.25)*(rough+.4*bb),half=.15+Math.random()*.25,
+     u=Math.min(6,vv*hgt/half),d=Math.max(1,Math.round(half/Math.max(vv,1)*120));suspKick(u,u,vv);suspKick(-u,-u,vv,d);}
+   const kick=(Math.random()-.5)*feel.rough*Math.min(1,vv/12)*.25;suspKick(kick,kick,vv);}
   let vf=P.vx*F.x+P.vz*F.z,vl=P.vx*Rv.x+P.vz*Rv.z;
   // vf is horizontal; the bike moves along the slope at vs = vf/cosθ. Forces act along the path, so integrate vs and
   // turn it back into horizontal speed — otherwise steep ground would carry you sideways faster than gravity can.
@@ -382,7 +388,7 @@ function step(dt){
  }
  // suspension and legs (suspension.js): driven by the wheels' hits queued in kF/kR (the rear's roughness a wheelbase
  // after the front's), loaded by gravity along the slope, cornering, braking (weight onto the fork) and stance
- {const q=P.bq,ri=P.bi%q.length;P.kR+=q[ri];q[ri]=0;P.bi++;
+ {const q=P.bq,ri=P.bi%q.length;P.kR+=q[ri];q[ri]=0;P.kF+=P.fq[ri];P.fq[ri]=0;P.bi++;
   const sp=Math.hypot(P.vx,P.vz),ac=Math.abs((P.om||0)*sp),Ge=G*(P.cosA||1)*Math.sqrt(1+(ac/G)**2);
   const legT=input.hopHeld&&P.ground?.2:P.ground?.04*input.brake:-.04;    // crouch to load a hop; extend a little in the air
   stepSusp(SS,{ground:P.ground,G:Ge,aB:P.ground?(P.bDec||0):0,fore:P.fore||0,legT,dvF:P.kF,dvR:P.kR},dt);P.kF=P.kR=0;
