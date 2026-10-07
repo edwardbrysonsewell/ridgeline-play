@@ -472,7 +472,7 @@ export function trailAt(x, z) {
 //   h = lerp(h, Y, flat)            riding surfaces (crest, slabs, lips, landings) are clean planes, not noise.
 //   h += band(s + jitter)·taper     cliff drops and the canyon gap are "bands": exact long profiles across a limited width
 //                                   (a cliff band with ragged ends, a slot canyon that pinches out), built from ballistics.
-// Ballistics, in this game's physics: takeoff horizontal speed u, vertical u·(lip slope); g = 9.81; air drag 2.5 %/s;
+// Ballistics, in this game's physics: takeoff horizontal speed u, vertical u·(lip slope); g = 9.81; air drag 0.003·v² since 2026-10-06 (2.5 %/s when these were designed — ~2 % shorter flights now);
 // a landing crashes when the normal impact speed vn > 10 m/s with assist (8.5 without), bottoms out above 6 (game.js's
 // two-tyre model, 2026-10-06). That model also means a lip must be CRISP — a near-vertical edge right after it — or the
 // body rides down a rounded edge on its rear tyre and leaves nose-down with the vertical speed gone.

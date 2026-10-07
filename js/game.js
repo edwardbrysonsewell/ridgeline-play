@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import {deckAt,WOOD_FEEL,setMountain,MOUNTAINS,postsIn,COURSE,STRUCTS,clamp,lerp,smooth,damp,wrapA,$,store,fmt,heightAt,surfaceInto,rideFeel,clearAt,GATES,FINISH,START,TILE,I_MIN,I_MAX,J_MIN,J_MAX,X_MIN,X_MAX,Z_MIN,Z_MAX,
- forestAt,featureList,isMobile} from './core.js';
+ forestAt,featureList,isMobile,RZ,rzX} from './core.js';
 import {renderer,scene,camera,resize,dust,debris,updateWorld,renderWorld,setQuality,getQuality} from './world.js';
 import * as TERRAIN from './terrain.js';
 import * as STRUCT from './structures.js';
@@ -189,6 +189,10 @@ function assistSteer(v,F,R){let om=0,w=0;const t=target();
   if(fwd>.5&&fwd<reach&&Math.abs(lat)<clear)push+=(lat>=0?1:-1)*(1-fwd/reach)*(clear-Math.abs(lat));});
  if(push){om+=clamp(push*2.6,-3,3);w=Math.max(w,.9);}
  return {om,w};}
+function rideSpeed(F,feel){const s0=surf(P.x,P.z),s8=surf(P.x+F.x*8,P.z+F.z*8),s16=surf(P.x+F.x*16,P.z+F.z*16);
+ const s=Math.max(0,(s0-s8)/8,(s8-s16)/8);
+ if(RZ.on){const sd=-P.z;for(const f of RZ.feats)if(f.lip!=null&&sd>f.lip-110&&sd<f.lip+2&&Math.abs(P.x-rzX(sd))<20)return 99;}
+ return (12.5-7*smooth(.12,.8,s))*(1-.3*feel.rough);}
 function step(dt){
  const F={x:-Math.sin(P.th),z:-Math.cos(P.th)},Rv={x:Math.cos(P.th),z:-Math.sin(P.th)};
  const live=state==='ride'||state==='finish';
@@ -205,9 +209,11 @@ function step(dt){
   // vf is horizontal; the bike moves along the slope at vs = vf/cosθ. Forces act along the path, so integrate vs and
   // turn it back into horizontal speed — otherwise steep ground would carry you sideways faster than gravity can.
   const cA=1/Math.sqrt(1+gF*gF);let vs=vf/cA;
-  // assist keeps open-slope speeds sane: a gentle brake above ~63 km/h
-  // (earlier on steep ground, where the brakes can do less before you'd pitch over the bars)
-  P.autoBrake=0;{const vMax=17.5-6*clamp(-gF-.35,0,.5);if(assist&&state==='ride'&&!brake&&vs>vMax){brake=clamp((vs-vMax)/4,0,1);P.autoBrake=brake;}}
+  // assist rides at the speed a good rider would pick (World Cup winners average ~36 km/h at Fort William, ~80 at
+  // the fastest point): up to 45 km/h on open gentle ground, 38 at 22°, 28 at 29°, 20 at 39°, less on rough ground —
+  // judged from the slope 8–16 m ahead, so the braking starts before the steep part. Into a built jump or drop the
+  // rider lets it run: those need their speed (terrainfn.js designs them for 13–18 m/s at the lip).
+  P.autoBrake=0;if(assist&&state==='ride'&&!brake){const vMax=rideSpeed(F,feel);if(vs>vMax){brake=clamp((vs-vMax)/2.5,0,1);P.autoBrake=brake;}}
   // rider + bike ≈ 100 kg, CdA ≈ 0.5 m² in the attack position → ½ρCdA/m ≈ 0.003
   const DRAG=.003,MASS=100;
   let a=-G*gF*cA-feel.roll*cA*Math.sign(vs)-DRAG*(1-.22*Math.max(0,input.lean))*vs*Math.abs(vs)-.045*feel.rough*vs;
@@ -221,10 +227,13 @@ function step(dt){
   const fore=clamp(input.lean-Math.max(.8*input.btnBrake,P.autoBrake),-1,1);P.fore=fore;
   // brakes: both wheels together can use most of the tyres' grip (the rest is left for steering) — but no more than
   // tips you over the front wheel. Moments about the front contact: braking force·h ≥ g·cosα·x pitches you over,
-  // with x the mass's distance behind the front axle (≈0.62 m neutral, 0.9 m hips back, 0.34 m over the bars)
-  // and h its height (≈1.05 m). On a 30° slope that limit is ~0.5 g neutral and ~0.8 g with your weight back.
-  const cosA=1/Math.sqrt(1+gF*gF),tipLim=G*cosA*(.62-.28*fore)/(1.05-.1*Math.abs(fore));
-  const bRaw=brake*feel.grip*G*.92*Math.min(1,vs/1.2),bDecel=Math.min(bRaw,tipLim);if(brake)a-=bDecel;P.bDec=bDecel;
+  // with x the mass's distance behind the front axle and h its height. A DH bike (1.3 m wheelbase, bottom bracket
+  // 0.445 m ahead of the rear axle) with the rider in the attack position carries ~38 % on the front: x ≈ 0.80 m
+  // neutral, 1.05 m hips back (and lower), 0.55 m over the bars; h ≈ 1.05 m (rider ~1.15 m, bike ~0.55 m).
+  // On a 30° slope the limit is ~0.66 g neutral (net slowing 1.6 m/s²) and, with your weight back, the tyres' grip.
+  // The tyres' grip itself scales with the normal force, g·cosα.
+  const cosA=1/Math.sqrt(1+gF*gF),tipLim=G*cosA*(.8-.25*fore)/(1.05-.1*Math.max(0,-fore));
+  const bRaw=brake*feel.grip*G*cosA*.92*Math.min(1,vs/1.2),bDecel=Math.min(bRaw,tipLim);if(brake)a-=bDecel;P.bDec=bDecel;
   P.stoppie=damp(P.stoppie||0,clamp((bRaw-tipLim)/(.25*G),0,1),10,dt);
   // grabbing a fistful with your weight over the bars at speed: over you go
   if(state==='ride'&&bRaw-tipLim>.35*G&&vf>4&&fore>.3){crash('Over the bars');return;}
@@ -265,7 +274,7 @@ function step(dt){
   // keeps the rotation rate the ground gives it. Where the ground falls away under the front tyre faster than the
   // bike can follow (off a step, over the lip of a steep roll-in, cresting at speed) nothing holds the front up: it
   // rotates nose-down about the rear contact under gravity, α = g·(d·cosθ − 0.25·sinθ)/(k²+d²+h²), with the mass
-  // d ≈ 0.66 m ahead of the rear axle (0.42 m with your weight right back) and h ≈ 1.05 m up — the rider stays
+  // d ≈ 0.50 m ahead of the rear axle (0.25 m with your weight right back; the same mass as the braking limit) and h ≈ 1.05 m up — the rider stays
   // upright over the cranks as the bike pitches, so the lever arm stays forward of the rear contact. The rear tyre carries
   // it until the rear goes over the edge too, and then you're in the air with that rotation. So at walking pace the
   // nose drops before the rear reaches the edge (a nose-dive); at speed you're past the edge first and fly off level.
@@ -278,20 +287,24 @@ function step(dt){
     if(live&&vImp>1.2)fx('land',vImp/9);if(state==='ride'&&vImp>7.5){crash('Over the bars');return;}}
    // the rotation the ground gives the bike, low-passed so the texture of the dirt doesn't turn into spin
    P.bpw=P.frontFree?0:damp(P.bpw,clamp(gpw,-1.5,1.5),8,dt);P.bp=gp;P.frontFree=false;}
-  else{const d=clamp(.66+.24*fore,.42,.9),th=P.bp;           // the front is unsupported
+  else{const d=clamp(.5+.25*fore,.25,.75),th=P.bp;           // the front is unsupported
    P.bpw-=G*(d*Math.cos(th)-.25*Math.sin(th))/(.12+d*d+1.1)*dt;P.bp=clamp(Math.max(gp,P.bp+P.bpw*dt),-1.35,1.35);P.frontFree=gp<P.bp-.03;}
   // the centre rides on the rear contact and the body's pitch; the frame can't sink more than 0.3 m into a crest
   // (the contacts are sampled a wheelbase apart horizontally, so heights along the body go with tan of its pitch)
   const yc=Math.max(hR+WB/2*Math.tan(P.bp),surf(nx,nz)-.3);
   if(yc<yb-.045&&vf2>2){P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.bp;P.airW=clamp(P.bpw,-2,2);P.frontFree=false;P.x=nx;P.z=nz;P.y=yb;P.vy-=G*dt;}
   else{const nvy=placed?0:clamp((yc-P.y)/dt,-40,Math.max(4,vf2*1.2));{const dv=clamp((nvy-P.vy)*.3,-1.5,2.5);P.sFV+=dv;P.sRV+=dv;}P.vy=nvy;P.x=nx;P.z=nz;P.y=yc;}
-  if(input.hop&&live&&state!=='finish'){input.hop=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.pitch;P.airW=0;P.frontFree=false;P.vy=Math.max(P.vy,0)+2.9+2.7*input.hopCharge;fx('hop',input.hopCharge);P.sFV=P.sRV=-1.2;}
+  // bunny hop: a heavy DH bike lifts its wheels ~0.25 m on a quick pop, ~0.55 m fully loaded (a typical good rider
+  // clears ~30 cm, a strong one ~60 cm). It adds to the way you're already moving: off a lip, to the lip's lift;
+  // on a downhill slope, to your descent, so you rise ~0.25–0.55 m off the ground rather than above where you were
+  if(input.hop&&live&&state!=='finish'){input.hop=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.pitch;P.airW=0;P.frontFree=false;P.vy+=2.2+1.1*input.hopCharge;fx('hop',input.hopCharge);P.sFV=P.sRV=-1.2;}
   P.wheel+=vf2*dt/.39;if(P.pedal)P.crank+=dt*(5+vf2*.5);
  }else{
-  P.deck=null;P.air+=dt;P.vy-=G*dt;P.vx*=1-.0025*dt*10;P.vz*=1-.0025*dt*10;
-  if(live){if(Math.abs(steer)>.08)P.whip=clamp(P.whip-steer*3.4*dt,-1.2,1.2);else P.whip=damp(P.whip,0,3.2,dt);P.th-=steer*.25*dt;
-   // air control: steering bends the flight path a little
-   const oa=-steer*.3,ca=Math.cos(oa*dt),sa=Math.sin(oa*dt),nvx=P.vx*ca+P.vz*sa,nvz=-P.vx*sa+P.vz*ca;P.vx=nvx;P.vz=nvz;P.th+=oa*dt;}
+  // in the air: the same drag as on the ground (½ρCdA/m ≈ 0.003, against the whole velocity) and gravity
+  P.deck=null;P.air+=dt;{const k=.003*Math.hypot(P.vx,P.vy,P.vz)*dt;P.vx-=k*P.vx;P.vy-=k*P.vy;P.vz-=k*P.vz;}P.vy-=G*dt;
+  if(live){if(Math.abs(steer)>.08)P.whip=clamp(P.whip-steer*3.4*dt,-1.2,1.2);else P.whip=damp(P.whip,0,3.2,dt);
+   // nothing in the air can bend the flight path: steering only turns the bike, to set it up for the landing
+   P.th-=steer*.45*dt;}
   P.whipMax=Math.max(P.whipMax,Math.abs(P.whip));
   // body english in the air: Brake = lean back (nose up), Hop = push the bars down (nose down)
   P.leanRef=damp(P.leanRef||0,0,2.2,dt);
@@ -423,7 +436,8 @@ function updateCamera(dt){
   const jp=tr*.05*sn(camT*22,1)+rough*.006*sn(camT*31,4)+camK.y*.35,jy=tr*.04*sn(camT*19,7),jr=tr*.05*sn(camT*17,9);
   camera.position.y+=rough*.012*sn(camT*27,2);
   camera.rotation.set(fp.pitch+flp+jp,fp.yaw+jy,fp.roll+jr,'YXZ');
-  const hf=THREE.MathUtils.degToRad(96+clamp(sp0-6,0,20)*.7);const vf=clamp(THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(hf/2)/camera.aspect)),70,92);
+  const hf=THREE.MathUtils.degToRad(96);   // fixed, like a real helmet camera: no widening with speed
+  const vf=clamp(THREE.MathUtils.radToDeg(2*Math.atan(Math.tan(hf/2)/camera.aspect)),70,92);
   camS.fov=damp(camS.fov,vf,3,dt);camera.fov=camS.fov;camera.updateProjectionMatrix();
   camS.dir.set(-Math.sin(fp.yaw),0,-Math.cos(fp.yaw));camS.look.copy(camera.position).addScaledVector(camS.dir,4);return;}
  const sp=Math.hypot(P.vx,P.vz);const vd=sp>1?V3(P.vx/sp,0,P.vz/sp):F;camS.dir.lerp(vd,1-Math.exp(-(state==='finish'?1:4)*dt)).normalize();
@@ -436,7 +450,8 @@ function updateCamera(dt){
  const tr=shake*shake,rough=P.ground?P.rough*Math.min(1,sp/12):0;
  camera.position.y+=camK.y+rough*.018*sn(camT*26,2);camera.rotateX(tr*.04*sn(camT*21,1));camera.rotateY(tr*.035*sn(camT*18,5));
  camera.rotateZ(-P.roll*.12+tr*.04*sn(camT*16,8));
- camS.fov=damp(camS.fov,60+clamp(sp-6,0,20)*.75,3,dt);camera.fov=camS.fov;camera.updateProjectionMatrix();
+ camS.fov=damp(camS.fov,60,3,dt);   // fixed, like a real camera: no widening with speed
+ camera.fov=camS.fov;camera.updateProjectionMatrix();
 }
 
 // ───────────────────────── HUD: minimap and gate arrow
