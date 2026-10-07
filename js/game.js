@@ -12,6 +12,7 @@ import {bike,bikeBody,rider,eye,updateBikePose,reattachRider,setFirstPerson} fro
 import {HAP} from './haptics.js';
 import {makeSusp,stepSusp,TRAVEL,SAG_F,SAG_R} from './suspension.js';
 import {SFX} from './audio.js';
+import {TEL} from './telemetry.js';
 const {populateTile,updateFlora}=FLORA;const floraReady=FLORA.floraReady||Promise.resolve();
 const V3=(x,y,z)=>new THREE.Vector3(x,y,z);
 
@@ -80,7 +81,7 @@ function styleGates(){gateMeshes.forEach((g,k)=>{const race=mode==='race';g.visi
 
 
 // ───────────────────────── game state
-const G=9.81,WB=1.3;   // suspension (220 mm each end, the rider on his legs) lives in suspension.js
+const G=9.81,WB=1.3;   // suspension (250 mm each end, the rider on his legs) lives in suspension.js
 let SS=makeSusp();
 // a bump under the front wheel now and under the rear a wheelbase later (ring buffer of physics steps at 120 Hz)
 function suspKick(f,r,v,d=0){const n=Math.min(150,Math.round(WB/Math.max(v,2)*120));if(d)P.fq[(P.bi+d)%P.fq.length]+=f;else P.kF+=f;P.bq[(P.bi+n+d)%P.bq.length]+=r;}
@@ -103,7 +104,7 @@ function deckSide(x,z){const d=deckAt(x,z,P.y+1.4);return d&&d.y>P.y+.3&&d.y>hei
 function placeRider(x,z,th,y){P.x=x;P.z=z;P.y=y??heightAt(x,z);P.th=th;P.vx=P.vz=P.vy=0;P.ground=true;P.air=0;P.whip=0;P.pitch=0;P.roll=0;P.lean=0;P.leanV=0;P.susp=0;P.suspV=0;P.bp=NaN;P.bpw=0;P.frontFree=false;P.airW=0;SS=makeSusp();P.sF=SAG_F;P.sR=SAG_R;P.sFV=P.sRV=0;P.kF=P.kR=0;P.wOK=false;P.bq.fill(0);P.fq.fill(0);
  reattachRider();crashBodies.length=0;setFirstPerson(view==='helmet');fp.yaw=P.th;}
 function startRun(m){if(m)mode=m;if(typeof tilt!=='undefined')tilt.cal=true;store.set('mode',mode);
- if(mode==='skinny'&&CORE.BALANCE.start){const b=CORE.BALANCE.start;placeRider(b.x,b.z,b.th);SK.sec=-1;SK.dabs=0;SK.offT=0;SK.onSec=-1;SK.done=false;}else placeRider(START.x,START.z-1,0);runT=0;gateIdx=0;splits=[];crashes=0;topSpd=0;airTotal=0;style=0;P.dist=0;crumbs.length=0;
+ if(mode==='skinny'&&CORE.BALANCE.start){const b=CORE.BALANCE.start;placeRider(b.x,b.z,b.th);SK.sec=-1;SK.dabs=0;SK.offT=0;SK.onSec=-1;SK.done=false;}else placeRider(START.x,START.z-1,0);runT=0;gateIdx=0;splits=[];crashes=0;topSpd=0;airTotal=0;style=0;P.dist=0;crumbs.length=0;TEL.reset();
  state=mode==='race'?'countdown':'ride';cdT=3.2;styleGates();
  show(['title','results','pause','crashmsg'],false);show(['hud-time','hud-speed','minimap','pauseBtn','viewBtn','hop','brake','steerhint'],true);show(['nav'],mode==='race');
  $('hudLbl').textContent=mode==='race'?'Run time':mode==='skinny'?'Skinnies':'Style';const bs=mode==='skinny'?store.get(SK.bestKey()):best;$('tPB').textContent=(mode!=='free'&&bs)?'Best '+fmt(bs):'';
@@ -230,14 +231,17 @@ function step(dt){
   // rocks, roots and braking bumps under the tyres: each drives the wheel up at ~v·height/half-length, then lets it
   // back down past the top, the rear a wheelbase after the front (World Cup data: square-edge hits 3–6 m/s at the
   // wheel; braking bumps 5–15 Hz before corners). Plus a fine chatter.
+  // Each hit throws both wheels' unsprung mass (≈ 3.5 kg each of the 100 kg) up at u; that energy is lost to the
+  // tyre and damper, so the bike loses Δv = 0.035·u²/v. This is the only rough-ground speed loss (brief: no extra term).
+  let hitDv=0;
   {const vv=Math.abs(P.vx*F.x+P.vz*F.z),rough=P.deck?.1:.3+.7*feel.rough,bb=brake>.25&&!P.deck&&vv>4?brake:0;
    if((P.clock||0)-(P.lastLandT??-9)>.25&&Math.random()<vv*(rough*.9+bb*.8)*dt){const r=Math.random(),hgt=(.03+r*r*.25)*(rough+.4*bb),half=.15+Math.random()*.25,
-     u=Math.min(6,vv*hgt/half),d=Math.max(1,Math.round(half/Math.max(vv,1)*120));suspKick(u,u,vv);suspKick(-u,-u,vv,d);}
+     u=Math.min(6,vv*hgt/half),d=Math.max(1,Math.round(half/Math.max(vv,1)*120));suspKick(u,u,vv);suspKick(-u,-u,vv,d);hitDv=.035*u*u/Math.max(vv,2);}
    const kick=(Math.random()-.5)*feel.rough*Math.min(1,vv/12)*.25;suspKick(kick,kick,vv);}
   let vf=P.vx*F.x+P.vz*F.z,vl=P.vx*Rv.x+P.vz*Rv.z;
   // vf is horizontal; the bike moves along the slope at vs = vf/cosθ. Forces act along the path, so integrate vs and
   // turn it back into horizontal speed — otherwise steep ground would carry you sideways faster than gravity can.
-  const cA=1/Math.sqrt(1+gF*gF);let vs=vf/cA;
+  const cA=1/Math.sqrt(1+gF*gF);let vs=Math.max(0,vf/cA-hitDv);
   // assist rides at the speed a good rider would pick (World Cup winners average ~36 km/h at Fort William, ~80 at
   // the fastest point): up to 58 km/h on open gentle ground, 49 at 22°, 38 at 29°, 29 at 39°, less on rough ground —
   // judged from the slope 8–16 m ahead, so the braking starts before the steep part. Into a built jump or drop the
@@ -245,14 +249,17 @@ function step(dt){
   P.autoBrake=0;if(assist&&state==='ride'&&!brake){const vMax=rideSpeed(F,feel);if(vs>vMax){brake=clamp((vs-vMax)/2.5,0,1);P.autoBrake=brake;}}
   // rider + bike ≈ 100 kg, CdA ≈ 0.5 m² in the attack position → ½ρCdA/m ≈ 0.003
   const DRAG=.003,MASS=100;
-  let a=-G*gF*cA-feel.roll*cA*clamp(P.loadV??1,0,3)*Math.sign(vs)-DRAG*(1-.22*Math.max(0,input.lean))*vs*Math.abs(vs)-.045*feel.rough*vs;
-  // pedalling: ~750 W sprint, auto-pedals on flatter ground; DH gearing spins out above ~48 km/h
+  let a=-G*gF*cA-feel.roll*cA*clamp(P.loadV??1,0,3)*Math.sign(vs)-DRAG*(1-.22*Math.max(0,input.lean))*vs*Math.abs(vs);
+  // pedalling: ~350 W, what a racer sustains (sprints of 1200+ W are for the start gate), auto-pedals on flatter
+  // ground; DH gearing spins out above ~48 km/h
   const narrow=P.deck&&P.deck.w<.75;
   if(mode==='skinny'&&state==='ride'&&!brake&&vs>(narrow?4.2:6)){brake=clamp((vs-(narrow?4.2:6))/2,0,.8);}
-  P.pedal=live&&state!=='finish'&&!brake&&vs<(mode==='skinny'?3.4:13.3)&&(gF>-.12||vs<6);if(P.pedal)a+=Math.min(2.6,750/(MASS*Math.max(vs,2)))*(1-smooth(11.5,13.3,vs));
+  P.pedal=live&&state!=='finish'&&!brake&&vs<(mode==='skinny'?3.4:13.3)&&(gF>-.12||vs<6);if(P.pedal)a+=Math.min(1.4,350/(MASS*Math.max(vs,2)))*(1-smooth(11.5,13.3,vs));
   // brakes: both wheels together can use most of the tyres' grip (the rest is left for steering)
   // weight fore/aft: tilt (or, braking on the button, an instinctive shift back). It sets where your mass sits
   // over the wheels: back raises the braking limit on steep ground; forward weights the front tyre for corners.
+  // assist feathers the brakes like a racer: on steep ground the speed builds at most ~1.5 m/s² (0–40 km/h in ~7 s)
+  if(assist&&state==='ride'&&!input.brake&&vs>3&&a>1.5){const fb=clamp((a-1.5)/(feel.grip*G*.9),0,1);if(fb>brake){brake=fb;P.autoBrake=fb;}}
   const fore=clamp(input.lean-Math.max(.8*input.btnBrake,P.autoBrake),-1,1);P.fore=fore;
   // brakes: both wheels together can use most of the tyres' grip (the rest is left for steering) — but no more than
   // tips you over the front wheel. Moments about the front contact: braking force·h ≥ g·cosα·x pitches you over,
@@ -287,7 +294,9 @@ function step(dt){
   // friction circle: grip spent braking is not available for cornering
   const latMax=Math.sqrt(Math.max(.05,(feel.grip*LV*G*(1+.6*Math.abs(gR))*(1+.08*fore))**2-bDecel*bDecel));const grip=latMax*dt;
   P.gripUse=damp(P.gripUse||0,Math.min(1.5,Math.abs(vl2)/Math.max(1e-4,grip)),12,dt);
-  if(Math.abs(vl2)<=grip){vl2=0;P.skid=damp(P.skid,0,8,dt);}else{vl2-=Math.sign(vl2)*grip;P.skid=Math.min(1,Math.abs(vl2)/3);vf2=Math.max(0,vf2-.35*grip);}
+  // past the peak the tyre keeps only feel.post of its grip: on loam and grass a slide holds (a drift you can ride);
+  // on hardpack, rock and wood it falls to ~70 %, so unless you stand the bike up at once it washes out
+  if(Math.abs(vl2)<=grip){vl2=0;P.skid=damp(P.skid,0,8,dt);}else{const gk=grip*(feel.post??1);vl2-=Math.sign(vl2)*gk;P.skid=Math.min(1,Math.abs(vl2)/3);vf2=Math.max(0,vf2-.35*gk);}
   if(brake&&vf2>3)P.skid=Math.max(P.skid,brake*.5);if(skidTurn)P.skid=Math.max(P.skid,.8);
   // a long uncontrolled slide at speed washes out the front
   P.slideT=(P.skid>.85&&!skidTurn&&vf2>7)?P.slideT+dt:Math.max(0,P.slideT-dt*2);if(state==='ride'&&P.slideT>.75){P.slideT=0;crash('Washed out');return;}
@@ -321,11 +330,15 @@ function step(dt){
   // the centre rides on the rear contact and the body's pitch; the frame can't sink more than 0.3 m into a crest
   // (the contacts are sampled a wheelbase apart horizontally, so heights along the body go with tan of its pitch)
   const yc=Math.max(hR+WB/2*Math.tan(P.bp),surf(nx,nz)-.3);
-  if(yc<yb-.045&&vf2>2){P.vy-=clamp(.4*SS.vF+.6*SS.vR+.88*SS.LV,-1.5,3);P.wOK=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.bp;P.airW=clamp(P.bpw,-2,2);P.frontFree=false;P.x=nx;P.z=nz;P.y=yb;P.vy-=G*dt;}
+  if(yc<yb-.045&&vf2>2){P.vy-=clamp(.4*SS.vF+.6*SS.vR+.88*SS.LV,-1.5,3);
+   // racers absorb crests (pull the bike up into the body, stay low) unless they mean to fly: the assist does it for
+   // you, soaking up to ~2.2 m/s of the lift relative to the ground ahead (not when hopping or into a built jump/drop)
+   if(assist&&state==='ride'&&!input.hopHeld&&!rzCommit()&&!trailDropAhead()){const gA=(surf(nx+F2.x*3,nz+F2.z*3)-surf(nx,nz))/3,ex=P.vy-vf2*gA;if(ex>0)P.vy-=Math.min(ex,2.2);}P.wOK=false;P.ground=false;P.air=0;P.leanRef=input.lean;P.flip=0;P.flipW=0;P.flipHold=0;P.whip=0;P.whipMax=0;P.airOff=0;P.airOffV=0;P.airPitch=P.bp;P.airW=clamp(P.bpw,-2,2);P.frontFree=false;P.x=nx;P.z=nz;P.y=yb;P.vy-=G*dt;}
   else{const nvy=placed?0:clamp((yc-P.y)/dt,-40,Math.max(4,vf2*1.2));P.vy=nvy;P.x=nx;P.z=nz;P.y=yc;
    // the wheels ride the ground (rear contact and the body's chord); their change of vertical speed is what drives
    // the suspension — smoothed over the tyre's footprint (~0.25 m), so the 1 m trail polyline doesn't chatter
    const yR=hR,yF=hR+WB*Math.tan(P.bp),kk=1-Math.exp(-dt*Math.max(vf2,2)/.25);
+   if(P.wReset){P.wReset=false;P.wOK=true;P.vwR=P.vwF=P.vy;P.yR0=yR;P.yF0=yF;}   // just landed: the hit is already in
    if(P.wOK){const wR=lerp(P.vwR,(yR-P.yR0)/dt,kk),wF=lerp(P.vwF,(yF-P.yF0)/dt,kk);P.kR+=wR-P.vwR;P.kF+=wF-P.vwF;P.vwR=wR;P.vwF=wF;}
    else{P.vwR=P.vwF=P.vy;P.wOK=true;}P.yR0=yR;P.yF0=yF;}
   // bunny hop: a heavy DH bike lifts its wheels ~0.25 m on a quick pop, ~0.55 m fully loaded (a typical good rider
@@ -362,7 +375,7 @@ function step(dt){
    const n=V3(-gx,1,-gz).normalize();const vd=P.vx*n.x+P.vy*n.y+P.vz*n.z,vn=-vd;
    P.y=h;P.ground=true;
    // speed into the ground: 8.5 m/s is a 3.7 m drop to flat (the trials world record to flat is 4.1–5.15 m); past it
-   // you crash. A 220 mm DH bike bottoms out from ~6 m/s (a 1.8 m drop to flat). Landing on a transition is gentle:
+   // you crash. With 250 mm at each end the bike reaches its bottom-out zone at ~7 m/s (a 2.5 m drop to flat). Landing on a transition is gentle:
    // only the speed INTO the slope counts.
    if(live&&state==='ride'&&Math.abs(P.whip)>.8){crash('Sideways');return;}
    const Fh={x:-Math.sin(P.th),z:-Math.cos(P.th)};const slope=Math.atan(gx*Fh.x+gz*Fh.z),turns=Math.round((P.flip||0)/(Math.PI*2)),miss=P.airPitch+(P.flip||0)-turns*Math.PI*2-slope;
@@ -373,7 +386,7 @@ function step(dt){
    P.vx-=vd*n.x;P.vy-=vd*n.y;P.vz-=vd*n.z;
    // the hit goes into the suspension at the speed of the impact (nose down loads the fork, tail down the shock);
    // springs, dampers and the rider's legs decide whether it's a soft landing, a bottom-out or a crash
-   P.kF+=vn*(1+.5*clamp(-miss,0,1)-.3*clamp(miss,0,1));P.kR+=vn*(1+.5*clamp(miss,0,1)-.3*clamp(-miss,0,1));P.wOK=false;P.lastAir=P.air;P.lastVn=vn;P.lastLandT=P.clock||0;shake=Math.max(shake,Math.min(.8,vn*.05));if(live)camK.v-=Math.min(3.2,vn*.32);
+   P.kF+=vn*(1+.5*clamp(-miss,0,1)-.3*clamp(miss,0,1));P.kR+=vn*(1+.5*clamp(miss,0,1)-.3*clamp(-miss,0,1));P.wReset=true;P.lastAir=P.air;P.lastVn=vn;P.lastLandT=P.clock||0;shake=Math.max(shake,Math.min(.8,vn*.05));if(live)camK.v-=Math.min(3.2,vn*.32);
    const air=P.air;if(air<=.3&&vn>2.5&&live)fx('land',vn/14);
    if(air>.3&&live){fx('land',vn/9);
     for(let i=0;i<26;i++){const a=Math.random()*6.28,sp=1.5+Math.random()*3;dust.spawn(P.x,P.y+.1,P.z,Math.cos(a)*sp+P.vx*.25,.6+Math.random()*1.8,Math.sin(a)*sp+P.vz*.25,1.4+Math.random(),.9+Math.random()*.6,.55);}
@@ -395,16 +408,20 @@ function step(dt){
   P.sF=SS.sF;P.sR=SS.sR;P.sFV=SS.vF;P.sRV=SS.vR;P.legs=SS.L;
   // grip and rolling resistance follow the tyres' real load: up in compressions and landings, gone over a crest
   P.loadV=damp(P.loadV??1,P.ground?SS.load*G/Ge:0,30,dt);
-  const deep=Math.max(SS.sF,SS.sR)>.95*TRAVEL;
+  const deep=Math.max(SS.sF,SS.sR)>.97*TRAVEL;
   // legs out of bend at speed: off a landing the body slams the bike (a crash); from a hit on the ground (a kicker,
   // a rock face) the bike bucks you into the air instead
-  if(SS.legHit>4.5){if(live&&state==='ride'&&(P.lastAir||0)>.15&&(P.clock||0)-(P.lastLandT??-9)<.35){crash((P.lastAir||0)>.25?'Cased it':'Too hard');return;}
+  if(SS.legHit>6){if(live&&state==='ride'&&(P.lastAir||0)>.15&&(P.clock||0)-(P.lastLandT??-9)<.35){crash((P.lastAir||0)>.25?'Cased it':'Too hard');return;}
    if(P.ground)P.vy+=.5*SS.legHit;}
-  if(live&&((deep&&!P.wasDeep)||SS.legHit>.5)){const k=1-.12*Math.min(1,Math.max(SS.legHit,1)/3);P.vx*=k;P.vz*=k;shake=1;fx('bottom');if(state==='ride')pop('Bottomed out','bad');}
-  P.wasDeep=deep;P.susp=clamp(((P.sF+P.sR)/2-SAG_R)*2.2,-.12,.22);}
+  if(live&&((deep&&!P.wasDeep)||(SS.legHit>1.5&&!P.wasDeep&&(P.clock||0)-(P.lastLandT??-9)<.35))&&(P.clock||0)-(P.botT??-9)>.4){P.botT=P.clock||0;const k=1-.12*Math.min(1,Math.max(SS.legHit,1)/3);P.vx*=k;P.vz*=k;shake=1;fx('bottom',clamp(Math.max(SS.bottomF||0,SS.bottomR||0,SS.legHit||0)/3,.35,1));P.bottoms=(P.bottoms||0)+1;P.lastBot={leg:+SS.legHit.toFixed(1),sF:Math.round(SS.sF/TRAVEL*100),sR:Math.round(SS.sR/TRAVEL*100),air:P.lastAir,since:+((P.clock||0)-(P.lastLandT??-9)).toFixed(2)};(P.botLog=P.botLog||[]).push(P.lastBot);if(state==='ride'){pop('Bottomed out','bad');TEL.bottom(SS);}}
+  P.wasDeep=deep;P.susp=clamp(((P.sF+P.sR)/2-SAG_R)/TRAVEL*.484,-.12,.22);}   // depth into the travel past sag (scaled to the stroke)
  // obstacles and bounds
  if(state==='ride'){let hit=null;nearColliders(P.x,P.z,o=>{if(hit)return;const dx=P.x-o.x,dz=P.z-o.z;if(dx*dx+dz*dz<(o.r+.25)**2&&P.y<(o.top!=null?o.top:heightAt(o.x,o.z)+(o.kind==='tree'?12:o.r*.7)))hit=o;});
   // logs: a 29" wheel rolls over a small one with a thump; a big one stops you unless you're in the air
+  // rocks: a 29" wheel at speed rolls over anything up to ~0.5 m across with a thump through the suspension; only
+  // boulders stop you
+  if(hit&&hit.kind!=='tree'&&hit.kind!=='log'&&hit.kind!=='post'&&hit.r<.5){if(P.ground&&hit!==P.lastRock){P.lastRock=hit;const sp=Math.hypot(P.vx,P.vz),u=Math.min(5,sp*hit.r*.6);suspKick(u,u,sp);suspKick(-u*.6,-u*.6,sp,Math.max(1,Math.round(hit.r*2/Math.max(sp,1)*120)));const k=1-.05*hit.r;P.vx*=k;P.vz*=k;}hit=null;}
+  else if(P.lastRock&&Math.hypot(P.x-P.lastRock.x,P.z-P.lastRock.z)>P.lastRock.r+1)P.lastRock=null;
   if(hit&&hit.kind==='log'&&(hit.r<.62||!P.ground)){if(P.ground&&hit!==P.lastLog){P.lastLog=hit;const k=.82;P.vx*=k;P.vz*=k;P.vy+=1.6;suspKick(.9,.9,Math.hypot(P.vx,P.vz));shake=Math.max(shake,.6);fx('log');}hit=null;}
   if(!hit)P.lastLog=P.lastLog&&Math.hypot(P.x-P.lastLog.x,P.z-P.lastLog.z)<P.lastLog.r+1?P.lastLog:null;
   if(hit){crash(hit.kind==='tree'?'Tree':hit.kind==='log'?'Log':hit.kind==='post'?'Stilt':'Rock');return;}
@@ -672,11 +689,14 @@ function present(rdt,now){
  STRUCT.updateStructures&&STRUCT.updateStructures(rdt,now,camera);
  updateWorld(rdt,now,bike.position,P.spd,{firstPerson:view==='helmet'&&state!=='crash'});updateFlora(rdt,now,camera,bike.position);
  SFX.update({spd:P.spd,live:state==='ride'||state==='finish',ground:P.ground,air:P.air,surf:SW,wood:!!P.deck,narrow:!!(P.deck&&P.deck.w<.75),rough:P.rough,skid:P.skid,brake:input.brake,
-  coast:!P.pedal,pedal:!!P.pedal,wheelHz:Math.hypot(P.vx,P.vz)/(2*Math.PI*.39),suspV:(P.sFV+P.sRV)*1.1,lean:P.lean,helmet:view==='helmet'&&state!=='crash',pumping:!!P.pumping,dt:rdt});
+  brakeF:P.ground?(P.bDec||0)*(input.brake>0?1:0):0,loadV:P.loadV??1,shaft:Math.abs(P.sFV||0)+Math.abs(P.sRV||0),vy:P.vy,
+  // rear wheel turns at v/2.36 rev/s (29" DH tyre); a locked rear in a braking skid stops the hub ticking
+  coast:!P.pedal,pedal:!!P.pedal,wheelHz:Math.hypot(P.vx,P.vz)/2.36*(P.ground?1-clamp((input.brake-.7)/.3,0,1)*clamp(P.skid*2,0,1):1),suspV:(P.sFV+P.sRV)*1.1,lean:P.lean,helmet:view==='helmet'&&state!=='crash',pumping:!!P.pumping,dt:rdt});
  hudT+=rdt;if(hudT>.066&&state!=='title'&&state!=='loading'){hudT=0;$('tTime').textContent=mode==='free'?String(style):fmt(runT);if(mode==='skinny')$('tPB').textContent='Section '+Math.max(0,SK.sec+1)+'/'+CORE.BALANCE.sections.length+' · '+SK.dabs+' dab'+(SK.dabs===1?'':'s');$('tSpd').textContent=Math.round(P.spd*3.6);drawMinimap();if(mode==='race')drawNav();}
+ TEL.frame(rdt,state,P,SS);
  renderWorld(rdt);
 }
-function finishRun(){const t=runT;let isPB=false;
+function finishRun(){const t=runT;let isPB=false;TEL.results();
  if(mode==='skinny'){const b=store.get(SK.bestKey());isPB=!b||t<b;if(isPB)store.set(SK.bestKey(),t);
   setTimeout(()=>{$('rHead').textContent='Skinnies · '+mtn().name;$('rTime').textContent=fmt(t);$('rBestL').textContent='Best';$('rBest').textContent=fmt(store.get(SK.bestKey()));
    $('rTop').textContent=Math.round(topSpd*3.6)+' km/h';$('rAir').textContent=airTotal.toFixed(1)+' s';$('rStyleL').textContent='Dabs';$('rStyle').textContent=SK.dabs;$('rCrash').textContent=crashes;$('rPB').hidden=!isPB;$('again').textContent='Try again';

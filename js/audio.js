@@ -7,7 +7,7 @@
 // Everything ends in a gentle compressor and a soft clipper whose ceiling is below 0 dBFS.
 
 const LA=.12;                       // scheduler look-ahead, s
-const POE=44;                       // freehub engagement points (loud DH hub)
+const POE=54;                       // freehub engagement points (loud 54T DH ratchet; real DH hubs 54-108)
 const VOICE_RATE=20,VOICE_BURST=10; // node-creating event voices per second / burst
 const fin=(v,d=0)=>Number.isFinite(v)?v:d;
 const clamp=(v,a,b)=>v<a?a:v>b?b:v;
@@ -17,7 +17,7 @@ const sstep=x=>{x=clamp(x,0,1);return x*x*(3-2*x);};
 // mix levels (linear); calibrated with tools/audio_test.mjs
 const M={rumble:.2,dirt:.25,grass:.2,forest:.4,rock:.32,wood:.7,skid:.55,
  wind:.16,buffet:.3,whistle:.03,whoosh:.2,hub:8,squeal:.07,pad:.12,drive:.05,
- grit:2.2,knock:.9,body:3,thud:.45,metal:.07,ev:1,tree:.6};
+ grit:2.2,knock:.9,body:3,thud:.45,metal:.07,ev:1,tree:.6,oil:1.2,rattle:2};
 
 export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable at runtime
 
@@ -81,6 +81,7 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
   lay('whoosh',nW2,'bandpass',1500,.7,bus.wind);  // clean air-time rush
   lay('pad',nW2,'bandpass',4200,1.5,bus.mech);    // pad friction hiss
   lay('drive',nW1,'bandpass',2600,2,bus.mech);    // chain over cogs while pedalling
+  lay('oil',nP,'bandpass',700,1.4,bus.mech);      // damper oil forced through the shim stacks (shaft speed)
 
   // freehub: impulse train at wheelHz×POE → hub-shell resonances. The wave is peak-normalised, so a click's
   // peak falls ~1/rate; update() scales gain ~rate^0.75 to keep every click about equally loud, as on a real hub.
@@ -107,11 +108,13 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
    metal.push({o1,o2,mg,ng,nf,last:0});}
   const thud=[];for(let i=0;i<2;i++){const o=c.createOscillator();o.type='triangle';o.frequency.value=60;const og=gain(),ng=gain(),nf=filt('lowpass',380,.8);
    o.connect(og);og.connect(bus.mech);chain(nP,ng,nf,bus.mech);o.start();thud.push({o,og,ng,nf,last:0});}
-  this._P={grit,knock,metal,thud,gi:0,ki:0};
+  // frame rattle: cable/housing and plastic ticks against the frame (tiny high-Q noise clicks)
+  const rattle=[];for(let i=0;i<2;i++){const v={g:gain(),f:filt('bandpass',4000,8),last:0};chain(i?nW1:nW2,v.g,v.f,bus.mech);rattle.push(v);}
+  this._P={grit,knock,metal,thud,rattle,gi:0,ki:0,ri:0};
 
   // state
   this._gG={t:0};this._gK={t:0,w:0};this._live=false;this._spd=0;this._sw=[1,0,0,0];this._wood=false;
-  this._sv=0;this._thT=0;this._csT=0;this._gust=0;this._swish=0;this._sq=.5;this._tok=VOICE_BURST;this._tokT=0;this._treeT=0;
+  this._sv=0;this._vy=NaN;this._gR={t:0};this._thT=0;this._csT=0;this._gust=0;this._swish=0;this._sq=.5;this._tok=VOICE_BURST;this._tokT=0;this._treeT=0;
  },
 
  // smoothed param set; ignores non-finite values and skips no-op updates
@@ -136,7 +139,9 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
 
   // ── tyres
   const g=ground?m:0,sp=Math.min(1,spd/14),soil=wood?0:1;
-  const load=(1+.35*Math.abs(lean)+(s.pumping?.25:0))*g;
+  // tyre load from the physics (loadV: 1 = static; up in compressions/berms, ~0 over crests); old heuristic as fallback
+  const lv=Number.isFinite(s.loadV)?clamp(s.loadV,0,2.5):NaN;
+  const load=(Number.isFinite(lv)?.35+.65*Math.pow(lv,.8):1+.35*Math.abs(lean)+(s.pumping?.25:0))*g;
   this._swish=clamp(this._swish+(Math.random()-.5)*dt*6-this._swish*dt*2,-.5,.5);
   const rumK=load*Math.pow(sp,1.2)*(.45+rough*1.3)*(wood?.55:(.6*sw[1]+1*sw[0]+.9*sw[2]+1.35*sw[3]));
   this._s(L.rumble.g.gain,M.rumble*rumK*(1+Math.min(1,Math.abs(suspV))*.6),.04);
@@ -175,13 +180,22 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
   this._s(L.drive.g.gain,m*(s.pedal?1:0)*Math.min(1,spd/6)*M.drive,.06);
 
   // ── brakes: howl comes in bouts and wanders in pitch
+  // bf: brake force as a fraction of g (physics deceleration P.bDec); falls back to the lever position
+  const bf=Number.isFinite(s.brakeF)?clamp(s.brakeF/9.81,0,1.2):brake;
   this._sq=clamp(this._sq+(Math.random()-.5)*dt*1.5,0,1);
-  const sqOn=ground&&brake>.45&&spd>2.5;
-  this._s(L.squeal.g.gain,sqOn?m*M.squeal*sstep((brake-.45)/.45)*Math.min(1,(spd-2.5)/6)*(.3+.7*this._sq):0,sqOn?.06:.03);
+  const sqOn=ground&&bf>.3&&spd>2.5;
+  this._s(L.squeal.g.gain,sqOn?m*M.squeal*sstep((bf-.3)/.45)*Math.min(1,(spd-2.5)/6)*(.3+.7*this._sq):0,sqOn?.06:.03);
+  this._s(L.squeal.lfo.frequency,clamp(wheelHz,2,12),.1);   // rotor runout: the howl wobbles once per wheel turn
   const f1=1150+650*this._sq+(Math.random()-.5)*30;
   this._s(L.squeal.o1.frequency,this._f(f1),.04);this._s(L.squeal.o2.frequency,this._f(f1*1.86),.04);
   this._s(L.squeal.depth.gain,6+22*this._sq,.1);
-  this._s(L.pad.g.gain,m*g*brake*Math.min(1,spd/10)*M.pad,.04);
+  this._s(L.pad.g.gain,m*g*Math.min(1,bf)*Math.min(1,spd/10)*M.pad,.04);   // ~ braking power F·v
+  this._s(L.pad.f.frequency,this._f(3000+spd*90),.05);
+
+  // ── damper: oil swish from fork+shock shaft speed (m/s); works in the air too (rebound after take-off)
+  const shaft=Number.isFinite(s.shaft)?clamp(Math.abs(s.shaft),0,8):Math.min(4,Math.abs(suspV)/1.1);
+  this._s(L.oil.g.gain,m*M.oil*Math.pow(Math.min(1.5,shaft/1.5),1.2),.03);
+  this._s(L.oil.f.frequency,this._f(450+520*Math.min(2.5,shaft)),.04);
 
   // ── scheduled transients: surface grains / clatter, or plank knocks
   if(g&&!wood&&spd>.4){
@@ -198,9 +212,17 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
 
   // ── suspension: thuds on hits, chain slap on rough ground
   const dv=Math.abs(suspV-this._sv)*(1/60)/dt;this._sv=suspV;
+  // frame jolt (m/s²): the larger of the suspension's change of speed and the bike's vertical acceleration
+  const vy=fin(s.vy,NaN),aV=Number.isFinite(vy)&&Number.isFinite(this._vy)?Math.abs(vy-this._vy)/dt:0;this._vy=ground?vy:NaN;
+  const acc=Math.min(400,Math.max(dv*60,aV));
+  if(g&&spd>.5){   // frame rattle: rate and level from jolts and rough ground
+   const j=Math.min(2,acc/20),rate=Math.min(45,rough*spd*1.2+j*22);
+   if(rate>2)this._gen(this._gR,now,rate,false,t=>{const P=this._P,v=P.rattle[P.ri=(P.ri+1)%P.rattle.length];
+    this._hit(v,t,M.rattle*(.25+.75*Math.min(1,j))*rnd(.3,1),rnd(2600,6800),rnd(6,14),rnd(.0015,.005));});else this._gR.t=0;
+  }else this._gR.t=0;
   if(g){
    if(dv>.3&&now>this._thT){const k=clamp((dv-.3)/.9,0,1);if(Math.random()<.35+.65*k){this._thud(now+.004,.12+.4*k,rnd(105,135),rnd(45,60),.05+.07*k);this._thT=now+.08;}}
-   if(dv>.22&&rough>.15&&now>this._csT){const k=clamp((dv-.22)/.6,0,1);
+   if(acc>13&&(rough>.15||acc>25)&&now>this._csT){const k=clamp((acc-13)/36,0,1);   // chain slap on the stay
     if(Math.random()<(coast?.55:.3)*(.3+.7*k)){this._chain(now+.004,.4+.6*k);this._csT=now+.11;}}
   }
  },
@@ -281,7 +303,10 @@ export const SFX={on:true,ctx:null,mix:M,  // mix: live level table, tweakable a
     this._burst({type:'bandpass',f0:1600,f1:900,q:1,a:.1+.1*k,att:.003,dur:.09});
     this._chain(t+.03,.35+.3*k);break;
    case 'bottom':
-    this._thud(t,1,95,40,.2);this._metal(t,760,1.71,1.6,.07,1.2,1500);this._metal(t+.006,1650,2.2,.7,.05);break;
+    // deep clunk: stanchions hitting the bumper/crown, a frame-borne knock, then the rear and the chain
+    this._thud(t,.6+.4*k,rnd(80,95),rnd(32,38),.16+.12*k);this._thud(t+.018+rnd(0,.01),.35+.35*k,rnd(105,125),45,.1);
+    this._burst({type:'lowpass',f0:700,f1:140,q:.9,a:.25+.45*k,att:.002,dur:.18+.1*k});
+    this._metal(t,rnd(700,800),1.71,.6+1*k,.06,.5+.7*k,1500);this._metal(t+.006,1650,2.2,.3+.4*k,.05);this._chain(t+.03,.5+.5*k);break;
    case 'crash':{
     this._thud(t,1,110,40,.3);
     this._burst({type:'lowpass',f0:900,f1:200,q:.7,a:.7,att:.004,dur:.35,force:true});                // body impact

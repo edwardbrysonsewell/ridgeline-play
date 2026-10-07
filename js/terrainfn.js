@@ -219,17 +219,19 @@ export function surfaceInto(x, z, ny, out) {
   out[0] = dirt; out[1] = grass; out[2] = forest; out[3] = rk;
   return out;
 }
-// rolling resistance (m/s²) and grip multiplier from surface weights, for 2.4–2.5" knobbly DH tyres.
-//  roll  = Crr·g (m/s²): hardpack ≈ .03 (DH casings roll ~10 % worse than trail tyres), grass ≈ .045, forest loam ≈ .055,
-//          rock slab ≈ .02. Coast-down tests on dirt trails measure 0.04–0.05 g all-in (Beck 2004); mixed off-road ≈ .022–.03.
-//  grip  = tyre friction μ: hardpack ≈ .85, dry grass ≈ .55 (slides early), loam ≈ .70, dry rock ≈ .95. No bike-tyre-on-dirt
-//          μ is published; proxies: car tyre on loose moist dirt 0.6–0.65, dirt road 0.35, lab MTB tyre on sandpaper ~1.3.
-//  rough = how chattery the ground is (suspension losses, camera buzz): roots and rock gardens most
-//  (WOOD_FEEL, the riding feel on woodwork, is unchanged by this pass.)
+// rolling resistance (m/s²), grip and post-peak grip from surface weights, for 2.4–2.5" knobbly DH tyres
+// (docs/physics-brief-2026-10-06.md, "Tires and surfaces"; dirt = trail hardpack, forest floor = dry loam):
+//  roll  = Crr·g (m/s²), scaled in game.js by the tyres' real load: hardpack .015, grass .04, loam .03, rock slab .018.
+//          No other speed-loss term: rough ground slows you through impacts (game.js, bump hits).
+//  grip  = peak tyre friction μ: hardpack .92, dry grass .60, dry loam 1.10 (knobs bite), dry rock .95.
+//  post  = share of the peak lateral grip a sliding tyre keeps. Loam and grass plateau past the peak (≈ .92–.95: a
+//          controllable drift); hardpack and rock drop sharply (.70: once it goes, it washes out).
+//  rough = how chattery the ground is (bump hits, suspension, camera buzz): roots and rock gardens most
 export function rideFeel(w) {
   return {
-    roll: (w[0] * .03 + w[1] * .045 + w[2] * .055 + w[3] * .02) * 9.81,
-    grip: w[0] * .85 + w[1] * .55 + w[2] * .70 + w[3] * .95,
+    roll: (w[0] * .015 + w[1] * .04 + w[2] * .03 + w[3] * .018) * 9.81,
+    grip: w[0] * .92 + w[1] * .60 + w[2] * 1.10 + w[3] * .95,
+    post: w[0] * .70 + w[1] * .92 + w[2] * .95 + w[3] * .70,
     rough: w[0] * .12 + w[1] * .3 + w[2] * .6 + w[3] * .75,
   };
 }
@@ -346,8 +348,8 @@ export function postsIn(x0, z0, x1, z1) {
       for (const sd of [-1, 1]) { const px = p.x + p.tz * sd * (st.w / 2 - .08) * -1, pz = p.z + p.tx * sd * (st.w / 2 - .08); if (px < x0 || px >= x1 || pz < z0 || pz >= z1) continue; out.push({ x: px, z: pz, y0: heightAt(px, pz), y1: p.y - .12, st: st.id }); } } }
   return out;
 }
-// riding on wood: fast-rolling, less grip than dirt (it's often damp), smooth
-export const WOOD_FEEL = { roll: .018 * 9.81, grip: .78, rough: .08 };
+// riding on wood (dry boards): fast-rolling (Crr .01), μ .80, grip drops sharply once it slides, smooth
+export const WOOD_FEEL = { roll: .01 * 9.81, grip: .80, post: .70, rough: .08 };
 
 // ───────────────────────── carved downhill trails
 // A trail is a 1 m polyline benched into the hillside. Its tread height is the raw ground smoothed along

@@ -10,7 +10,7 @@
 // Numbers follow DH setup practice (docs/physics-brief-2026-10-06.md): sag fork ~21 %, rear ~30 %; rear coil through
 // a falling leverage curve (~50 % stiffer at the end); air fork ramping in the last third; compression damping
 // ~30 % of critical with a high-speed blow-off, rebound ~55 %; a hydraulic bottom-out zone in the last 12 %.
-export const TRAVEL = .22, SAG_F = .046, SAG_R = .066;
+export const TRAVEL = .25, SAG_F = .0525, SAG_R = .075;
 export const MU_F = .12;                       // frame + upper fork + cockpit share of the mass (the rest is the rider)
 const MU_R = 1 - MU_F;
 const LEG_MIN = -.15;           // legs: extend 0.15 m, bend 0.30 m from the attack position

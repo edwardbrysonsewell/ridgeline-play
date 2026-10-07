@@ -122,6 +122,8 @@ h1 span{color:var(--tape)}
 .toggle input{width:20px;height:20px;accent-color:var(--tape)}
 #note{position:fixed;left:50%;bottom:calc(env(safe-area-inset-bottom,0px) + 130px);transform:translateX(-50%);max-width:min(90vw,420px);background:var(--paper);color:var(--ink);padding:10px 14px;border-radius:4px;font-size:13px;line-height:1.4;z-index:20;box-shadow:0 4px 20px rgba(0,0,0,.35)}
 .slider{display:flex;align-items:center;gap:10px;font-size:13px}.slider input{width:120px;accent-color:var(--tape);touch-action:pan-x}.slider span{font-family:var(--mono);font-size:12px;min-width:7ch;opacity:.85}
+#telRes{position:absolute;top:calc(env(safe-area-inset-top,0px) + 12px);right:calc(env(safe-area-inset-right,0px) + 16px);background:rgba(14,17,13,.6);border-radius:6px;padding:8px 10px;width:300px;pointer-events:none}
+.telLeg{display:flex;flex-wrap:wrap;gap:2px 12px;margin-top:6px;font-family:var(--mono);font-size:10px;font-variant-numeric:tabular-nums}.telLeg i{display:inline-block;width:8px;height:8px;margin-right:4px;border-radius:1px}.telLeg .dim{opacity:.6}
 #crashmsg{position:fixed;left:50%;top:30%;transform:translateX(-50%);text-align:center;pointer-events:none}
 #crashmsg .a{font-family:var(--display);font-weight:900;font-size:clamp(48px,14vw,84px);color:var(--slow);line-height:.9;text-transform:uppercase}
 #crashmsg .b{font-size:12px;letter-spacing:.2em;text-transform:uppercase;font-weight:700;opacity:.8;margin-top:6px}
@@ -183,6 +185,7 @@ h1 span{color:var(--tape)}
     <label class="toggle"><input type="checkbox" id="assist" checked> Steering assist</label>
     <label class="toggle"><input type="checkbox" id="tilt"> Tilt control</label>
     <label class="toggle"><input type="checkbox" id="hap" checked> Haptics</label>
+    <label class="toggle"><input type="checkbox" id="tel"> Telemetry</label>
     <label class="slider" for="sens">Steering <input type="range" id="sens" min="1" max="5" step="1" value="2"> <span id="sensVal">Smooth</span></label>
   </div>
 </div></div>
@@ -199,6 +202,7 @@ h1 span{color:var(--tape)}
   <div class="row"><label class="toggle"><input type="checkbox" id="assist2" checked> Steering assist</label>
   <label class="toggle"><input type="checkbox" id="tilt2"> Tilt control</label>
   <label class="toggle"><input type="checkbox" id="hap2" checked> Haptics</label>
+  <label class="toggle"><input type="checkbox" id="tel2"> Telemetry</label>
   <label class="slider" for="sens2">Steering <input type="range" id="sens2" min="1" max="5" step="1" value="2"> <span id="sens2Val">Smooth</span></label></div>
 </div></div>
 
@@ -212,6 +216,8 @@ h1 span{color:var(--tape)}
     <div><b id="rStyleL">Style</b><span id="rStyle">0</span></div>
     <div><b>Crashes</b><span id="rCrash">0</span></div>
   </div>
+  <div id="telRes" hidden><canvas id="telHist" style="width:300px;height:88px;display:block"></canvas>
+   <div class="telLeg"><span><i style="background:var(--paper)"></i>Fork</span><span><i style="background:var(--tape)"></i>Shock</span><span>Avg travel <b id="telAvg">—</b></span><span>Bottom-outs <b id="telBot">0</b></span><span class="dim">green band: World Cup average 25–40 %</span></div></div>
   <div class="row"><button class="btn" id="again">Ride again</button><button class="btn ghost" id="resTitle">Menu</button></div>
 </div></div>
 
