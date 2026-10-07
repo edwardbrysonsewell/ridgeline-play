@@ -192,7 +192,7 @@ function assistSteer(v,F,R){let om=0,w=0;const t=target();
 function rideSpeed(F,feel){const s0=surf(P.x,P.z),s8=surf(P.x+F.x*8,P.z+F.z*8),s16=surf(P.x+F.x*16,P.z+F.z*16);
  const s=Math.max(0,(s0-s8)/8,(s8-s16)/8);
  if(RZ.on){const sd=-P.z;for(const f of RZ.feats)if(f.lip!=null&&sd>f.lip-110&&sd<f.lip+2&&Math.abs(P.x-rzX(sd))<20)return 99;}
- return (12.5-7*smooth(.12,.8,s))*(1-.3*feel.rough);}
+ return (16-8*smooth(.12,.8,s))*(1-.2*feel.rough);}
 function step(dt){
  const F={x:-Math.sin(P.th),z:-Math.cos(P.th)},Rv={x:Math.cos(P.th),z:-Math.sin(P.th)};
  const live=state==='ride'||state==='finish';
@@ -210,7 +210,7 @@ function step(dt){
   // turn it back into horizontal speed — otherwise steep ground would carry you sideways faster than gravity can.
   const cA=1/Math.sqrt(1+gF*gF);let vs=vf/cA;
   // assist rides at the speed a good rider would pick (World Cup winners average ~36 km/h at Fort William, ~80 at
-  // the fastest point): up to 45 km/h on open gentle ground, 38 at 22°, 28 at 29°, 20 at 39°, less on rough ground —
+  // the fastest point): up to 58 km/h on open gentle ground, 49 at 22°, 38 at 29°, 29 at 39°, less on rough ground —
   // judged from the slope 8–16 m ahead, so the braking starts before the steep part. Into a built jump or drop the
   // rider lets it run: those need their speed (terrainfn.js designs them for 13–18 m/s at the lip).
   P.autoBrake=0;if(assist&&state==='ride'&&!brake){const vMax=rideSpeed(F,feel);if(vs>vMax){brake=clamp((vs-vMax)/2.5,0,1);P.autoBrake=brake;}}

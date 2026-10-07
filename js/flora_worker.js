@@ -23,7 +23,7 @@ const TRUNK={spruceA:.3,spruceB:.34,fir:.23,pine:.25,snag:.27,aspenA:.17,aspenB:
 // "Less trees" (the author, 2026-10-06): every forest is thinned to KEEP of its old density and broken by open glades
 // ~80 m across (20 % of the trees left inside them), and trees stand ≥ 1.5 m further back from every riding line (none within ~6 m of a race line). The
 // trees that remain are a subset of the old ones, at the same spots, so each mountain's forest keeps its character.
-const KEEP={ridgeline:.85,freefall:.7,widowmaker:.95,shoreline:1,rampage:1,razorback:.9,hollowfell:.9},TREE_LINE_CLR=1.5;
+const KEEP={ridgeline:.3,freefall:.24,widowmaker:.33,shoreline:.35,rampage:1,razorback:.3,hollowfell:.3},TREE_LINE_CLR=1.5;   // 10-06: Bryson "WAY too many trees" → about a third
 export const PROP_KEYS=['rockA','rockB','rockC','log','logOld','stump','logMoss','stumpMoss'];
 export const GROUND_KEYS=['grass','meadow','flowersA','flowersB','fern','bush','sapFir','sapSpruce','pebble'];
 export const KIND=['tree','rock','log'];
